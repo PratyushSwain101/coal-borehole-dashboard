@@ -700,10 +700,10 @@ with tab_litho_log:
     st.plotly_chart(fig_map, use_container_width=True, key="correlation_map")
     st.markdown("---")
     col1, col2, col3, col4 = st.columns([2.5, 1.5, 1.5, 1])
-    with col1: selected_bhids = st.multiselect("1. Select Boreholes (Order Matters):", bhid_list, default=bhid_list[:2] if len(bhid_list) > 1 else bhid_list, key='corr_bhid_select')
+    with col1: selected_bhids = st.multiselect("1. Select Boreholes:", bhid_list, default=bhid_list[:1] if len(bhid_list) > 1 else bhid_list, key='corr_bhid_select')
     with col2: reference_seam = st.selectbox("2. Select Seam for Correlation:", seam_list_with_none, key='corr_reference_seam', help="Select 'None' for true elevation view. Select a seam to flatten the plot on that seam's floor.")
     with col3: selected_seams_lines = st.multiselect("3. Plot Correlation Lines for:", seam_list, key='corr_lines_select')
-    with col4: st.write(""); st.write(""); filter_mode = st.radio("4. Lithology Filter:", ('All Lithologies', 'Coal Seams Only'), key='corr_litho_filter')
+    with col4: st.write(""); st.write(""); filter_mode = st.radio("4. Lithology Filter:", ('All Lithology', 'Coal Seams Only'), key='corr_litho_filter')
     if not selected_bhids: st.info("Please select at least one borehole to generate a correlation plot.")
     else:
         st.markdown("---")
@@ -805,3 +805,4 @@ with tab_quality:
                 st.subheader(f"Statistical Summary for {selected_param_d}")
 
                 st.dataframe(df_summary_table.style.set_properties(**{'text-align': 'left'}), use_container_width=True)
+
