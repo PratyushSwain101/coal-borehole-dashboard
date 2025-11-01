@@ -249,9 +249,13 @@ def plot_plan_view(df_bh, df_boundary, selected_bhids=None):
     
     fig.update_layout(
         xaxis_title="Easting (X) - UTM", yaxis_title="Northing (Y) - UTM", dragmode='pan',
-        yaxis=dict(scaleanchor="x", scaleratio=1), title_text="Borehole Locations & Block Boundary (Plan View)",
-        title_font=dict(color=PLOT_TEXT_COLOR), font=dict(color=PLOT_TEXT_COLOR), plot_bgcolor='white',
-        paper_bgcolor='white', hovermode="closest", height=700,
+        yaxis=dict(scaleanchor="x", scaleratio=1), 
+        title_text="Borehole Locations & Block Boundary (Plan View)",
+        title_font=dict(color=PLOT_TEXT_COLOR), 
+        font=dict(color=PLOT_TEXT_COLOR), 
+        plot_bgcolor='white', # Optimized for Light Theme
+        paper_bgcolor='white', # Optimized for Light Theme
+        hovermode="closest", height=700,
         legend=dict(font=dict(size=10)),
         margin=dict(l=0, r=0, t=50, b=50)
     )
@@ -353,7 +357,10 @@ def plot_litho_correlation(df_bh, df_litho, selected_bhids, selected_seams, filt
     fig.update_layout(
         title_text=title, title_font=dict(size=16),
         xaxis=dict(title="Cumulative Distance along Section (m)", tickvals=df_selected_bh['CUM_DISTANCE'], ticktext=[f'{d:.0f} m' for d in df_selected_bh['CUM_DISTANCE']], showgrid=False, zeroline=False),
-        yaxis=yaxis_config, height=700, barmode='stack', plot_bgcolor='white', paper_bgcolor='white', font=dict(color=PLOT_TEXT_COLOR),
+        yaxis=yaxis_config, height=700, barmode='stack', 
+        plot_bgcolor='white', 
+        paper_bgcolor='white', 
+        font=dict(color=PLOT_TEXT_COLOR),
         legend=dict(font=dict(size=10), x=1.02, y=1, bgcolor="rgba(255,255,255,0.8)", bordercolor="black", borderwidth=1),
         margin=dict(l=50, r=100, t=100, b=50)
     )
@@ -370,7 +377,11 @@ def plot_seam_stats(df_stats, title, y_axis_title, parameter, plot_type, selecte
         fig = px.bar(df_plot, x='COAL_SEAM', y='VALUE', title=title, labels={'VALUE': y_axis_title, 'COAL_SEAM': 'Coal Seam LCODE'}, color='COAL_SEAM', color_discrete_map=SEAM_COLOR_MAP, category_orders={"COAL_SEAM": seam_plot_order}, text='VALUE')
         fig.update_traces(texttemplate='%{text:.2f}', textposition='outside')
         y_max = df_plot['VALUE'].max() * 1.1 if not df_plot.empty and df_plot['VALUE'].max() > 0 else 10
-        fig.update_layout(xaxis={'categoryorder':'array'}, yaxis=dict(range=[0, y_max]), plot_bgcolor='white', paper_bgcolor='white', font=dict(color=PLOT_TEXT_COLOR), height=500, legend=dict(font=dict(size=10)))
+        fig.update_layout(
+            xaxis={'categoryorder':'array'}, yaxis=dict(range=[0, y_max]), 
+            plot_bgcolor='white', 
+            paper_bgcolor='white', 
+            font=dict(color=PLOT_TEXT_COLOR), height=500, legend=dict(font=dict(size=10)))
         df_summary = df_plot.rename(columns={'VALUE': y_axis_title})
         df_summary['COAL_SEAM'] = pd.Categorical(df_summary['COAL_SEAM'], categories=COAL_SEAM_LCODES, ordered=True)
         df_summary = df_summary.sort_values('COAL_SEAM')
@@ -397,8 +408,11 @@ def plot_seam_stats(df_stats, title, y_axis_title, parameter, plot_type, selecte
                 fig.add_annotation(x=i, y=stats['median'], text=f"{stats['median']:.2f}", showarrow=False, textangle=-90, font=dict(size=10, color=PLOT_TEXT_COLOR), yshift=15, xanchor='center', yanchor='middle', bgcolor="rgba(255,255,255,0.8)", bordercolor='black', borderwidth=0.5)
         y_data_min, y_data_max = df_summary_data['min'].min(), df_summary_data['max'].max()
         y_range = y_data_max - y_data_min if y_data_max > y_data_min else 1
-        y_min_adj, y_max_adj = y_data_min - y_range * 0.1, y_data_max + y_range * 0.1 
-        fig.update_layout(plot_bgcolor='white', paper_bgcolor='white', font=dict(color=PLOT_TEXT_COLOR), height=600, yaxis=dict(range=[y_min_adj, y_max_adj]), xaxis=dict(tickangle=-45, categoryorder='array', categoryarray=seam_plot_order), legend=dict(font=dict(size=10)))
+        y_min_adj, y_max_adj = y_data_min - y_range * 0.1, y_data_max + y_range * 0.1  
+        fig.update_layout(
+            plot_bgcolor='white', 
+            paper_bgcolor='white', 
+            font=dict(color=PLOT_TEXT_COLOR), height=600, yaxis=dict(range=[y_min_adj, y_max_adj]), xaxis=dict(tickangle=-45, categoryorder='array', categoryarray=seam_plot_order), legend=dict(font=dict(size=10)))
         df_full_stats = df_plot_raw.groupby('LCODE')[parameter].agg(['count', 'mean', 'median', 'std', 'min', 'max']).reset_index()
         df_full_stats.columns = ['SEAM NAME', 'Count', 'Mean', 'Median', 'Std Dev', 'Min', 'Max']
         for col in ['Mean', 'Median', 'Std Dev', 'Min', 'Max']: df_full_stats[col] = df_full_stats[col].round(2)
@@ -426,7 +440,10 @@ def plot_quality_crossplot(df_quality, selected_seam, selected_sample_type, x_pa
             fig.add_annotation(x=df_plot[x_param].max(), y=df_plot[y_param].min(), text=f"<b>Eq:</b> {equation}<br><b>R²:</b> {r_sq:.3f}", showarrow=False, xref="x", yref="y", xanchor='right', yanchor='bottom', bgcolor="rgba(255, 255, 255, 0.8)", bordercolor="black", borderwidth=1, font=dict(size=10))
         except Exception as e: st.caption(f"Note: Could not calculate regression line. Error: {e}")
     
-    fig.update_layout(plot_bgcolor='white', paper_bgcolor='white', font=dict(color=PLOT_TEXT_COLOR), height=600, hovermode='closest', coloraxis_colorbar=dict(title="Sample Interval (m)"), legend=dict(font=dict(size=10)))
+    fig.update_layout(
+        plot_bgcolor='white', 
+        paper_bgcolor='white', 
+        font=dict(color=PLOT_TEXT_COLOR), height=600, hovermode='closest', coloraxis_colorbar=dict(title="Sample Interval (m)"), legend=dict(font=dict(size=10)))
     return fig
 
 def preprocess_quality_data(df_litho, df_quality, df_bh, selected_seam, selected_sample_type):
@@ -685,7 +702,9 @@ def plot_quality_plan_view(df_bh, df_boundary, df_quality, df_litho):
     fig.update_layout(
         xaxis_title="Easting (X) - UTM", yaxis_title="Northing (Y) - UTM", dragmode='pan', yaxis=dict(scaleanchor="x", scaleratio=1),
         title_text=f"Plan View: {param_display_name} Distribution in Seam {selected_seam} ({selected_sample_type})",
-        plot_bgcolor='white', paper_bgcolor='white', hovermode="closest", height=700,
+        plot_bgcolor='white', # Optimized for Light Theme
+        paper_bgcolor='white', # Optimized for Light Theme
+        hovermode="closest", height=700,
         font=dict(color=PLOT_TEXT_COLOR),
         margin=dict(l=50, r=250, t=80, b=50), 
         legend=dict(font=dict(size=10), x=1.1, y=1, yanchor='top', xanchor='left', bgcolor="rgba(255,255,255,0.8)", bordercolor="black", borderwidth=1)
@@ -742,100 +761,6 @@ def plot_quality_plan_view(df_bh, df_boundary, df_quality, df_litho):
 
     # --- END NEW FEATURE ---
     
-
-
-
-# --- NEW FUNCTION: LITHOLOGY TABLE (UPDATED) ---
-
-def toggle_coal_only():
-    """Toggles the 'show_coal_only' state in the session."""
-    st.session_state['show_coal_only'] = not st.session_state.get('show_coal_only', False)
-
-def display_lithology_table(df_litho, selected_bhids):
-    if not selected_bhids:
-        st.info("Select one or more boreholes above to view the lithology table.")
-        return
-
-    st.markdown("---")
-    st.subheader("Borehole Lithology Data Table")
-    
-    # Use st.columns to control layout
-    col_select, col_button = st.columns([1, 1])
-
-    # 1. Borehole Selection
-    with col_select:
-        # If multiple boreholes are selected for the plot, allow selection of one for the table
-        if len(selected_bhids) == 1:
-            selected_bhid_table = selected_bhids[0]
-            st.markdown(f"**Selected Borehole:** `{selected_bhid_table}`")
-        else:
-            # Default to the first selected BHID if multiple are chosen
-            selected_bhid_table = st.selectbox(
-                "Select a Borehole for the Table:",
-                selected_bhids,
-                index=selected_bhids.index(st.session_state.get('litho_table_bhid_select', selected_bhids[0])) if 'litho_table_bhid_select' in st.session_state and st.session_state['litho_table_bhid_select'] in selected_bhids else 0,
-                key='litho_table_bhid_select'
-            )
-            
-    # Handle the case where the previously selected BHID is no longer in the list (e.g. after plot selection change)
-    if not selected_bhid_table:
-        selected_bhid_table = selected_bhids[0]
-
-    # 2. Filter Button (Show COAL SEAMS only)
-    with col_button:
-        # Use columns inside col_button to push the button to the right
-        col_spacer, col_btn = st.columns([1.5, 1], gap="small")
-        
-        with col_btn:
-            # The button is now inside col_btn (width 1) which is preceded by a spacer (width 1.5)
-            # This pushes the button to the right edge of the total col_button space (width 2.5/2.5)
-            st.write("") # Add some vertical space for alignment
-            button_label = "Show All Lithologies" if st.session_state['show_coal_only'] else "Show Coal Seams Only"
-            st.button(button_label, on_click=toggle_coal_only, key='toggle_coal_only_button', use_container_width=True)
-
-
-    # 3. Filtering Logic
-    df_filtered = df_litho[df_litho['BHID'] == selected_bhid_table].copy()
-
-    if st.session_state['show_coal_only']:
-        df_filtered = df_filtered[df_filtered['LCODE'].isin(COAL_SEAM_LCODES)]
-        st.info(f"Displaying only Coal Seams for **{selected_bhid_table}**.")
-    else:
-        st.info(f"Displaying All Lithologies for **{selected_bhid_table}**.")
-
-    # 4. Display Table
-    if df_filtered.empty:
-        st.warning(f"No lithology data found for {selected_bhid_table} based on the current filter.")
-    else:
-        # *** UPDATED COLUMN ORDER AND NAMES ***
-        df_display = df_filtered[['BHID', 'FROM', 'TO', 'WIDTH', 'LCODE', 'DETAILED LITHOLOGY']].rename(
-            columns={'WIDTH': 'THICKNESS (m)', 'DETAILED LITHOLOGY': 'LITHOLOGY DESCRIPTION'}
-        ).sort_values(by='FROM').reset_index(drop=True)
-        
-        # *** UPDATED STYLING: ONLY COAL SEAMS COLORED ***
-        def color_rows(s):
-            is_coal = s['LCODE'] in COAL_SEAM_LCODES
-            
-            # Apply color only if it's a coal seam, otherwise transparent/white
-            if is_coal:
-                color = SEAM_COLOR_MAP.get(s['LCODE'], DEFAULT_SEAM_COLOR)
-                # Use a very light shade for the background (e.g., opacity 25 or 40)
-                bg_color = color + '40'
-            else:
-                # White background for non-coal rows
-                bg_color = 'white' 
-                
-            return [f'background-color: {bg_color}' for _ in s]
-        
-        st.dataframe(
-            df_display.style.apply(color_rows, axis=1).format(
-                {'FROM': "{:.2f}", 'TO': "{:.2f}", 'INTERVAL (m)': "{:.2f}"}
-            ).set_properties(**{'text-align': 'left'}),
-            use_container_width=True
-        )
-
-
-
 
 # --- TAB 0: Data Management (Definition) ---
 def data_upload_tab():
@@ -924,6 +849,73 @@ with tab_litho_log:
         st.plotly_chart(fig_corr, use_container_width=True, key="main_correlation_plot")
         
         # --- NEW CODE: LITHOLOGY TABLE INTEGRATION ---
+        # The logic for this section was missing in the original, but assuming you want the fixed version
+        def toggle_coal_only():
+            st.session_state['show_coal_only'] = not st.session_state.get('show_coal_only', False)
+
+        def display_lithology_table(df_litho, selected_bhids):
+            if not selected_bhids:
+                st.info("Select one or more boreholes above to view the lithology table.")
+                return
+
+            st.markdown("---")
+            st.subheader("Borehole Lithology Data Table")
+            
+            col_select, col_button = st.columns([1, 1])
+
+            with col_select:
+                if len(selected_bhids) == 1:
+                    selected_bhid_table = selected_bhids[0]
+                    st.markdown(f"**Selected Borehole:** `{selected_bhid_table}`")
+                else:
+                    selected_bhid_table = st.selectbox(
+                        "Select a Borehole for the Table:",
+                        selected_bhids,
+                        index=selected_bhids.index(st.session_state.get('litho_table_bhid_select', selected_bhids[0])) if 'litho_table_bhid_select' in st.session_state and st.session_state['litho_table_bhid_select'] in selected_bhids else 0,
+                        key='litho_table_bhid_select'
+                    )
+            
+            if not selected_bhid_table:
+                selected_bhid_table = selected_bhids[0]
+
+            with col_button:
+                col_spacer, col_btn = st.columns([1.5, 1], gap="small")
+                with col_btn:
+                    st.write("") 
+                    button_label = "Show All Lithologies" if st.session_state['show_coal_only'] else "Show Coal Seams Only"
+                    st.button(button_label, on_click=toggle_coal_only, key='toggle_coal_only_button', use_container_width=True)
+
+            df_filtered = df_litho[df_litho['BHID'] == selected_bhid_table].copy()
+
+            if st.session_state['show_coal_only']:
+                df_filtered = df_filtered[df_filtered['LCODE'].isin(COAL_SEAM_LCODES)]
+                st.info(f"Displaying only Coal Seams for **{selected_bhid_table}**.")
+            else:
+                st.info(f"Displaying All Lithologies for **{selected_bhid_table}**.")
+
+            if df_filtered.empty:
+                st.warning(f"No lithology data found for {selected_bhid_table} based on the current filter.")
+            else:
+                df_display = df_filtered[['BHID', 'FROM', 'TO', 'WIDTH', 'LCODE', 'DETAILED LITHOLOGY']].rename(
+                    columns={'WIDTH': 'THICKNESS (m)', 'DETAILED LITHOLOGY': 'LITHOLOGY DESCRIPTION'}
+                ).sort_values(by='FROM').reset_index(drop=True)
+                
+                def color_rows(s):
+                    is_coal = s['LCODE'] in COAL_SEAM_LCODES
+                    if is_coal:
+                        color = SEAM_COLOR_MAP.get(s['LCODE'], DEFAULT_SEAM_COLOR)
+                        bg_color = color + '40'
+                    else:
+                        bg_color = 'white' 
+                    return [f'background-color: {bg_color}' for _ in s]
+                
+                st.dataframe(
+                    df_display.style.apply(color_rows, axis=1).format(
+                        {'FROM': "{:.2f}", 'TO': "{:.2f}", 'THICKNESS (m)': "{:.2f}"}
+                    ).set_properties(**{'text-align': 'left'}),
+                    use_container_width=True
+                )
+        
         display_lithology_table(df_litho, selected_bhids)
         # --- END NEW CODE ---
 
@@ -1020,5 +1012,3 @@ with tab_quality:
             if not df_summary_table.empty:
                 st.subheader(f"Statistical Summary for {selected_param_d}")
                 st.dataframe(df_summary_table.style.set_properties(**{'text-align': 'left'}), use_container_width=True)
-
-
