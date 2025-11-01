@@ -721,8 +721,8 @@ def plot_quality_plan_view(df_bh, df_boundary, df_quality, df_litho):
             df_summary_highlight.insert(1, 'Seam', selected_seam)
             df_summary_highlight.insert(2, 'Sample Type', selected_sample_type)
             df_summary_highlight.insert(3, 'Parameter', QUALITY_PARAMETERS.get(selected_param_key, selected_param_key).split('(')[0].strip()) # Use short name
-            df_summary_highlight.insert(5, 'Min Range', f"{min_val:.2f}")
-            df_summary_highlight.insert(6, 'Max Range', f"{max_val:.2f}")
+            # df_summary_highlight.insert(5, 'Min Range', f"{min_val:.2f}")
+            # df_summary_highlight.insert(6, 'Max Range', f"{max_val:.2f}")
             
             # 3. Rename the Value column for clarity in the table
             param_unit_match = QUALITY_PARAMETERS.get(selected_param_key, selected_param_key)
@@ -917,3 +917,4 @@ with tab_quality:
             if not df_summary_table.empty:
                 st.subheader(f"Statistical Summary for {selected_param_d}")
                 st.dataframe(df_summary_table.style.set_properties(**{'text-align': 'left'}), use_container_width=True)
+
