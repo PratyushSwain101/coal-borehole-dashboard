@@ -33,7 +33,7 @@ QUALITY_PARAMETERS = {
     'HGI': 'HGI'
 }
 # Base colors for the visualization
-PLOT_TEXT_COLOR = 'black' 
+PLOT_TEXT_COLOR = 'white' 
 NON_COAL_COLOR = '#ADD8E6' # Lightblue color (Used for non-coal bars in correlation plot)
 NON_COAL_BORDER = 'black'
 CORRELATION_COLORS = pcolors.qualitative.Bold
@@ -45,7 +45,7 @@ SEAM_COLOR_MAP = {
     for i, seam in enumerate(COAL_SEAM_LCODES)
 }
 # Fallback for plotting in the loop in case the map is very large
-DEFAULT_SEAM_COLOR = 'gray'
+DEFAULT_SEAM_COLOR = 'black'
 
 # Simple Color Mapping for Lithology
 def get_litho_color(lcode):
@@ -1020,3 +1020,4 @@ with tab_quality:
             if not df_summary_table.empty:
                 st.subheader(f"Statistical Summary for {selected_param_d}")
                 st.dataframe(df_summary_table.style.set_properties(**{'text-align': 'left'}), use_container_width=True)
+
