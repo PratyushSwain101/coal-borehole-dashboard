@@ -479,16 +479,12 @@ def plot_quality_plan_view(df_bh, df_boundary, df_quality, df_litho):
     # Preprocess/Aggregate data 
     df_analyzed = preprocess_quality_data(df_litho, df_quality, df_bh, selected_seam, selected_sample_type)
     
-    # <<< FIX #1 IS HERE: Create a temporary dataframe with seam depths >>>
-    # Since a seam can have multiple splits, we take the min 'FROM' and max 'TO' for each borehole
+    # Create a temporary dataframe with seam depths and merge
     seam_depths_df = df_litho[df_litho['LCODE'] == selected_seam].groupby('BHID').agg(
         SEAM_FROM=('FROM', 'min'),
         SEAM_TO=('TO', 'max')
     ).reset_index()
-
-    # Merge the seam depths into the main analyzed dataframe
     df_analyzed = pd.merge(df_analyzed, seam_depths_df, on='BHID', how='left')
-    # Also merge the Total Depth (TD) from the main borehole dataframe
     df_analyzed = pd.merge(df_analyzed, df_bh[['BHID', 'DEPTH']], on='BHID', how='left')
 
 
@@ -505,20 +501,48 @@ def plot_quality_plan_view(df_bh, df_boundary, df_quality, df_litho):
         param_min_data = df_plot_data[selected_param_key].min()
         param_max_data = df_plot_data[selected_param_key].max()
         
-        st.caption(f"Enter the Min/Max value for {param_display_name} (Data Range: {param_min_data:.2f} to {param_max_data:.2f})")
+        # --- FIX FOR DECIMAL INACCURACY (NEW) ---
+        # Round the actual min/max data points to 2 decimals for the input fields
+        param_min_rounded = round(float(param_min_data), 2)
+        param_max_rounded = round(float(param_max_data), 2)
+        # --- END FIX ---
+        
+        # Use the rounded display values in the caption
+        st.caption(f"Enter the Min/Max value for {param_display_name} (Data Range: {param_min_rounded:.2f} to {param_max_rounded:.2f})")
         
         col_min, col_max, col_highlight_mode = st.columns([1, 1, 2])
         
         with col_min:
-            min_val = st.number_input("Min Value:", min_value=float(param_min_data), max_value=float(param_max_data), value=float(param_min_data), step=0.1, key='quality_range_min')
+            # Use the rounded value for min_value and initial value
+            min_val = st.number_input(
+                "Min Value:", 
+                min_value=param_min_rounded, 
+                max_value=param_max_rounded, 
+                value=param_min_rounded, 
+                step=0.1, 
+                format="%.2f",
+                key='quality_range_min'
+            )
         with col_max:
-            max_val = st.number_input("Max Value:", min_value=float(param_max_data), max_value=float(param_max_data), value=float(param_max_data), step=0.1, key='quality_range_max')
+            # min_value is tied to the current min_val for validation, 
+            # max_value is set to the rounded max data limit.
+            max_val = st.number_input(
+                "Max Value:", 
+                min_value=float(min_val), # Prevents Max < Min
+                max_value=param_max_rounded, 
+                value=param_max_rounded, 
+                step=0.1,
+                format="%.2f",
+                key='quality_range_max'
+            )
+        
         with col_highlight_mode:
             st.write(""); st.write(""); highlight_mode = st.radio("Highlight Boreholes:", ('None', 'In Range', 'Outside Range'), index=0, key='highlight_mode', horizontal=True)
             
+        # The subsequent validation check can remain, but is less likely to trigger
         if min_val > max_val:
-            st.error("Minimum value cannot be greater than Maximum value. Using default range.")
-            min_val, max_val = param_min_data, param_max_data
+            st.error("Minimum value cannot be greater than Maximum value. Re-adjusting...")
+            pass 
         
         if highlight_mode == 'In Range':
             df_plot_data['Filtered'] = (df_plot_data[selected_param_key] >= min_val) & (df_plot_data[selected_param_key] <= max_val)
@@ -530,7 +554,7 @@ def plot_quality_plan_view(df_bh, df_boundary, df_quality, df_litho):
         st.markdown("---")
         
 
-# <<< FIX #2 IS HERE: New Hover Template with Units >>>
+        # <<< HOVER TEMPLATE CODE (No change here) >>>
         param_short_name = param_display_name.split('(')[0].strip() # e.g. "Total Coal Seam Thickness"
         
         # Logic to extract the unit
@@ -803,6 +827,4 @@ with tab_quality:
             st.plotly_chart(fig_dist, use_container_width=True)
             if not df_summary_table.empty:
                 st.subheader(f"Statistical Summary for {selected_param_d}")
-
                 st.dataframe(df_summary_table.style.set_properties(**{'text-align': 'left'}), use_container_width=True)
-
