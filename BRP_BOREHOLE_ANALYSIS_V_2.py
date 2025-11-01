@@ -84,7 +84,7 @@ if 'selected_sample_type' not in st.session_state:
 if 'dist_scope' not in st.session_state:
     st.session_state['dist_scope'] = 'Single Borehole'
     
-# --- FILE PROCESSING FUNCTIONS (Unchanged) ---
+# --- FILE PROCESSING FUNCTIONS ---
 
 def process_bh_data(uploaded_file):
     if uploaded_file:
@@ -190,7 +190,7 @@ def plot_plan_view(df_bh, df_boundary, selected_bhids=None):
         name='Block Boundary', hovertemplate='Boundary Point<extra></extra>', showlegend=True
     ))
 
-    # <<< FIX #1 IS HERE: Define the new hover template >>>
+    # <<< Hover template >>>
     hover_template = (
         '<b>BHID:</b> %{customdata[0]}<br>' +
         '<b>RL:</b> %{customdata[1]:.2f}<br>' +
@@ -201,7 +201,7 @@ def plot_plan_view(df_bh, df_boundary, selected_bhids=None):
     
     df_unselected = df_bh[~df_bh['BHID'].isin(selected_bhids)]
     
-    # <<< FIX #2 IS HERE: Apply the new template to the unselected boreholes trace >>>
+    # <<< Unselected boreholes trace >>>
     fig.add_trace(go.Scatter(
         x=df_unselected['X'], y=df_unselected['Y'], mode='markers', 
         marker=dict(size=8, color=NON_COAL_COLOR, line=dict(width=1, color=NON_COAL_BORDER)),
@@ -220,7 +220,7 @@ def plot_plan_view(df_bh, df_boundary, selected_bhids=None):
     if selected_bhids:
         df_selected = df_bh[df_bh['BHID'].isin(selected_bhids)]
         if not df_selected.empty:
-            # <<< FIX #3 IS HERE: Apply the new template to the selected boreholes trace >>>
+            # <<< Selected boreholes trace >>>
             fig.add_trace(go.Scatter(
                 x=df_selected['X'], y=df_selected['Y'], mode='markers', 
                 marker=dict(size=13, color='red', symbol='circle', line=dict(width=2, color=PLOT_TEXT_COLOR)),
@@ -442,11 +442,13 @@ def preprocess_quality_data(df_litho, df_quality, df_bh, selected_seam, selected
         df_stats = pd.merge(df_stats, wavg_results, on='BHID', how='left')
     return df_stats
 
-# --- FUNCTION FOR QUALITY PLAN VIEW (Corrected Layout and Enhanced Hover Text) ---
+
+# --- FUNCTION FOR QUALITY PLAN VIEW (WITH ALL FIXES AND NEW TABLE) ---
 def plot_quality_plan_view(df_bh, df_boundary, df_quality, df_litho):
     
     # 1. Selection Controls for Seam, Sample Type, Parameter, and Color Scale
-    col_seam, col_sample, col_param, col_colorscale = st.columns([1, 1, 1, 1])
+    # Added col_secondary_param for the new feature
+    col_seam, col_sample, col_param, col_secondary_param, col_colorscale = st.columns([1, 1, 1, 1, 1])
     
     param_list = list(QUALITY_PARAMETERS.keys())
     sample_type_list = ['All Samples']
@@ -468,12 +470,18 @@ def plot_quality_plan_view(df_bh, df_boundary, df_quality, df_litho):
         if not available_params:
             st.warning("No quality data columns found.")
             return
-        selected_param_key = st.selectbox("3. Select Quality Parameter:", available_params, key='map_param_select')
+        selected_param_key = st.selectbox("3. Color Parameter (Primary):", available_params, key='map_param_select')
         param_display_name = QUALITY_PARAMETERS.get(selected_param_key, selected_param_key)
+    
+    # NEW: Secondary Parameter Control
+    with col_secondary_param:
+        available_secondary = ['None'] + available_params
+        selected_secondary_key = st.selectbox("4. Label Parameter (Secondary):", available_secondary, index=0, key='map_secondary_param_select')
+        secondary_display_name = QUALITY_PARAMETERS.get(selected_secondary_key, selected_secondary_key)
 
     with col_colorscale:
         sequential_colorscales = sorted(['Viridis', 'Plasma', 'Inferno', 'Magma', 'Cividis', 'Turbo', 'Jet', 'Hot', 'Electric', 'Portland', 'Blackbody'])
-        selected_colorscale = st.selectbox("4. Select Color Scale:", sequential_colorscales, index=0, key='map_colorscale_select')
+        selected_colorscale = st.selectbox("5. Select Color Scale:", sequential_colorscales, index=0, key='map_colorscale_select')
 
     # Preprocess/Aggregate data 
     df_analyzed = preprocess_quality_data(df_litho, df_quality, df_bh, selected_seam, selected_sample_type)
@@ -500,11 +508,9 @@ def plot_quality_plan_view(df_bh, df_boundary, df_quality, df_litho):
         param_min_data = df_plot_data[selected_param_key].min()
         param_max_data = df_plot_data[selected_param_key].max()
         
-        # --- FIX FOR DECIMAL INACCURACY (NEW) ---
         # Round the actual min/max data points to 2 decimals for the input fields
         param_min_rounded = round(float(param_min_data), 2)
         param_max_rounded = round(float(param_max_data), 2)
-        # --- END FIX ---
         
         # Use the rounded display values in the caption
         st.caption(f"Enter the Min/Max value for {param_display_name} (Data Range: {param_min_rounded:.2f} to {param_max_rounded:.2f})")
@@ -512,7 +518,6 @@ def plot_quality_plan_view(df_bh, df_boundary, df_quality, df_litho):
         col_min, col_max, col_highlight_mode = st.columns([1, 1, 2])
         
         with col_min:
-            # Use the rounded value for min_value and initial value
             min_val = st.number_input(
                 "Min Value:", 
                 min_value=param_min_rounded, 
@@ -523,8 +528,6 @@ def plot_quality_plan_view(df_bh, df_boundary, df_quality, df_litho):
                 key='quality_range_min'
             )
         with col_max:
-            # min_value is tied to the current min_val for validation, 
-            # max_value is set to the rounded max data limit.
             max_val = st.number_input(
                 "Max Value:", 
                 min_value=float(min_val), # Prevents Max < Min
@@ -543,12 +546,11 @@ def plot_quality_plan_view(df_bh, df_boundary, df_quality, df_litho):
             st.error("Minimum value cannot be greater than Maximum value. Re-adjusting...")
             pass 
         
-        # --- START FIX FOR PRECISION ISSUE ---
+        # --- FIX FOR PRECISION ISSUE (INCLUSIVE RANGE LOGIC) ---
         
         # Define a small tolerance (epsilon) for float comparisons
         EPSILON = 0.00001
         
-        # Ensure min_val and max_val are correctly ordered
         actual_min = min(min_val, max_val)
         actual_max = max(min_val, max_val)
         
@@ -571,7 +573,7 @@ def plot_quality_plan_view(df_bh, df_boundary, df_quality, df_litho):
         
         st.markdown("---")
         
-        # <<< HOVER TEMPLATE CODE (No change here) >>>
+        # <<< HOVER TEMPLATE CODE >>>
         param_short_name = param_display_name.split('(')[0].strip() # e.g. "Total Coal Seam Thickness"
         
         # Logic to extract the unit
@@ -596,7 +598,7 @@ def plot_quality_plan_view(df_bh, df_boundary, df_quality, df_litho):
             '<b>Y:</b> %{y:.2f}<extra></extra>'
         )
 
-        # 1. Add Boreholes with Quality Data
+        # 1. Add Boreholes with Quality Data (Colored)
         fig.add_trace(
             go.Scatter(
                 x=df_plot_data['X'], y=df_plot_data['Y'], mode='markers',
@@ -624,7 +626,43 @@ def plot_quality_plan_view(df_bh, df_boundary, df_quality, df_litho):
             )
         )
         
-        # 3. Highlight Filtered Boreholes
+        # 2b. NEW: Add Secondary Quality Parameter Labels
+        if selected_secondary_key != 'None':
+            
+            # Helper function to format the text label
+            def format_secondary_label(row):
+                value = row[selected_secondary_key]
+                if pd.isna(value):
+                    return ''
+                # Get the short name and unit for display
+                short_name = secondary_display_name.split('(')[0].strip()
+                unit_match = secondary_display_name[secondary_display_name.find('(') : secondary_display_name.find(')')+1]
+                unit = unit_match if '(' in secondary_display_name else ''
+                
+                # Format: ShortName: Value (Unit)
+                return f"{short_name}: {value:.2f} {unit}"
+            
+            df_plot_data['SECONDARY_LABEL'] = df_plot_data.apply(format_secondary_label, axis=1)
+
+            # Define offset for the text to sit next to the marker
+            label_x_offset = 100 
+            
+            fig.add_trace(
+                go.Scatter(
+                    x=df_plot_data['X'] + label_x_offset, 
+                    y=df_plot_data['Y'], 
+                    mode='text', 
+                    text=df_plot_data['SECONDARY_LABEL'], 
+                    textposition="middle left",
+                    textfont=dict(size=9, color='darkgreen'), 
+                    name=f'{selected_secondary_key} Labels',
+                    showlegend=False, 
+                    hoverinfo='skip', 
+                    legendgroup='data_points'
+                )
+            )
+        
+        # 3. Highlight Filtered Boreholes (Red Ring)
         if highlight_mode != 'None':
             df_highlight = df_plot_data[df_plot_data['Filtered']]
             if not df_highlight.empty:
@@ -651,7 +689,9 @@ def plot_quality_plan_view(df_bh, df_boundary, df_quality, df_litho):
 
     st.plotly_chart(fig, use_container_width=True)
 
-    # Statistical Summary Table
+
+
+    # Statistical Summary Table (Existing Block)
     if not df_plot_data.empty:
         data_to_summarize = df_plot_data[selected_param_key].dropna()
         if not data_to_summarize.empty:
@@ -665,6 +705,43 @@ def plot_quality_plan_view(df_bh, df_boundary, df_quality, df_litho):
                 st.dataframe(df_summary.style.set_properties(**{'text-align': 'left'}), use_container_width=True)
                 st.markdown("---")
 
+
+
+    # --- START NEW FEATURE: HIGHLIGHTED BOREHOLES SUMMARY TABLE ---
+    if highlight_mode != 'None' and not df_plot_data.empty:
+        df_highlight = df_plot_data[df_plot_data['Filtered']].copy()
+        
+        if not df_highlight.empty:
+            
+            # 1. Create the summary dataframe
+            df_summary_highlight = df_highlight[['BHID', selected_param_key]].copy()
+            df_summary_highlight.columns = ['BHID', 'Value']
+            
+            # 2. Add static contextual information
+            df_summary_highlight.insert(1, 'Seam', selected_seam)
+            df_summary_highlight.insert(2, 'Sample Type', selected_sample_type)
+            df_summary_highlight.insert(3, 'Parameter', QUALITY_PARAMETERS.get(selected_param_key, selected_param_key).split('(')[0].strip()) # Use short name
+            df_summary_highlight.insert(5, 'Min Range', f"{min_val:.2f}")
+            df_summary_highlight.insert(6, 'Max Range', f"{max_val:.2f}")
+            
+            # 3. Rename the Value column for clarity in the table
+            param_unit_match = QUALITY_PARAMETERS.get(selected_param_key, selected_param_key)
+            param_unit = param_unit_match[param_unit_match.find('(') : param_unit_match.find(')')+1] if '(' in param_unit_match else ''
+            df_summary_highlight = df_summary_highlight.rename(columns={'Value': f'Value {param_unit}'})
+            
+            st.markdown("---")
+            st.subheader(f"Highlighted Boreholes Summary: **{highlight_mode}** ({len(df_highlight)} BHs)")
+            
+            # Display the table
+            st.dataframe(
+                df_summary_highlight.style.format({f'Value {param_unit}': "{:.2f}"}).set_properties(**{'text-align': 'left'}), 
+                use_container_width=True
+            )
+        else:
+            st.info(f"No boreholes found **{highlight_mode.lower()}** the range of {min_val:.2f} to {max_val:.2f}.")
+
+    # --- END NEW FEATURE ---
+    
 
 # --- TAB 0: Data Management (Definition) ---
 def data_upload_tab():
@@ -840,4 +917,3 @@ with tab_quality:
             if not df_summary_table.empty:
                 st.subheader(f"Statistical Summary for {selected_param_d}")
                 st.dataframe(df_summary_table.style.set_properties(**{'text-align': 'left'}), use_container_width=True)
-
