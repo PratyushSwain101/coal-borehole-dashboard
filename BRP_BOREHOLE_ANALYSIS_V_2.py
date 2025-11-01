@@ -34,7 +34,7 @@ QUALITY_PARAMETERS = {
 }
 # Base colors for the visualization
 PLOT_TEXT_COLOR = 'black' 
-NON_COAL_COLOR = '#ADD8E6' # Lightblue color
+NON_COAL_COLOR = '#ADD8E6' # Lightblue color (Used for non-coal bars in correlation plot)
 NON_COAL_BORDER = 'black'
 CORRELATION_COLORS = pcolors.qualitative.Bold
 
@@ -84,6 +84,10 @@ if 'selected_sample_type' not in st.session_state:
 if 'dist_scope' not in st.session_state:
     st.session_state['dist_scope'] = 'Single Borehole'
     
+# NEW SESSION STATE FOR LITHOLOGY TABLE FILTER
+if 'show_coal_only' not in st.session_state:
+    st.session_state['show_coal_only'] = False
+
 # --- FILE PROCESSING FUNCTIONS ---
 
 def process_bh_data(uploaded_file):
@@ -690,7 +694,6 @@ def plot_quality_plan_view(df_bh, df_boundary, df_quality, df_litho):
     st.plotly_chart(fig, use_container_width=True)
 
 
-
     # Statistical Summary Table (Existing Block)
     if not df_plot_data.empty:
         data_to_summarize = df_plot_data[selected_param_key].dropna()
@@ -704,7 +707,6 @@ def plot_quality_plan_view(df_bh, df_boundary, df_quality, df_litho):
                 st.subheader(f"Statistical Summary : ({selected_param_key})")
                 st.dataframe(df_summary.style.set_properties(**{'text-align': 'left'}), use_container_width=True)
                 st.markdown("---")
-
 
 
     # --- START NEW FEATURE: HIGHLIGHTED BOREHOLES SUMMARY TABLE ---
@@ -721,8 +723,6 @@ def plot_quality_plan_view(df_bh, df_boundary, df_quality, df_litho):
             df_summary_highlight.insert(1, 'Seam', selected_seam)
             df_summary_highlight.insert(2, 'Sample Type', selected_sample_type)
             df_summary_highlight.insert(3, 'Parameter', QUALITY_PARAMETERS.get(selected_param_key, selected_param_key).split('(')[0].strip()) # Use short name
-            # df_summary_highlight.insert(5, 'Min Range', f"{min_val:.2f}")
-            # df_summary_highlight.insert(6, 'Max Range', f"{max_val:.2f}")
             
             # 3. Rename the Value column for clarity in the table
             param_unit_match = QUALITY_PARAMETERS.get(selected_param_key, selected_param_key)
@@ -742,6 +742,100 @@ def plot_quality_plan_view(df_bh, df_boundary, df_quality, df_litho):
 
     # --- END NEW FEATURE ---
     
+
+
+
+# --- NEW FUNCTION: LITHOLOGY TABLE (UPDATED) ---
+
+def toggle_coal_only():
+    """Toggles the 'show_coal_only' state in the session."""
+    st.session_state['show_coal_only'] = not st.session_state.get('show_coal_only', False)
+
+def display_lithology_table(df_litho, selected_bhids):
+    if not selected_bhids:
+        st.info("Select one or more boreholes above to view the lithology table.")
+        return
+
+    st.markdown("---")
+    st.subheader("Borehole Lithology Data Table")
+    
+    # Use st.columns to control layout
+    col_select, col_button = st.columns([1, 1])
+
+    # 1. Borehole Selection
+    with col_select:
+        # If multiple boreholes are selected for the plot, allow selection of one for the table
+        if len(selected_bhids) == 1:
+            selected_bhid_table = selected_bhids[0]
+            st.markdown(f"**Selected Borehole:** `{selected_bhid_table}`")
+        else:
+            # Default to the first selected BHID if multiple are chosen
+            selected_bhid_table = st.selectbox(
+                "Select a Borehole for the Table:",
+                selected_bhids,
+                index=selected_bhids.index(st.session_state.get('litho_table_bhid_select', selected_bhids[0])) if 'litho_table_bhid_select' in st.session_state and st.session_state['litho_table_bhid_select'] in selected_bhids else 0,
+                key='litho_table_bhid_select'
+            )
+            
+    # Handle the case where the previously selected BHID is no longer in the list (e.g. after plot selection change)
+    if not selected_bhid_table:
+        selected_bhid_table = selected_bhids[0]
+
+    # 2. Filter Button (Show COAL SEAMS only)
+    with col_button:
+        # Use columns inside col_button to push the button to the right
+        col_spacer, col_btn = st.columns([1.5, 1], gap="small")
+        
+        with col_btn:
+            # The button is now inside col_btn (width 1) which is preceded by a spacer (width 1.5)
+            # This pushes the button to the right edge of the total col_button space (width 2.5/2.5)
+            st.write("") # Add some vertical space for alignment
+            button_label = "Show All Lithologies" if st.session_state['show_coal_only'] else "Show Coal Seams Only"
+            st.button(button_label, on_click=toggle_coal_only, key='toggle_coal_only_button', use_container_width=True)
+
+
+    # 3. Filtering Logic
+    df_filtered = df_litho[df_litho['BHID'] == selected_bhid_table].copy()
+
+    if st.session_state['show_coal_only']:
+        df_filtered = df_filtered[df_filtered['LCODE'].isin(COAL_SEAM_LCODES)]
+        st.info(f"Displaying only Coal Seams for **{selected_bhid_table}**.")
+    else:
+        st.info(f"Displaying All Lithologies for **{selected_bhid_table}**.")
+
+    # 4. Display Table
+    if df_filtered.empty:
+        st.warning(f"No lithology data found for {selected_bhid_table} based on the current filter.")
+    else:
+        # *** UPDATED COLUMN ORDER AND NAMES ***
+        df_display = df_filtered[['BHID', 'FROM', 'TO', 'WIDTH', 'LCODE', 'DETAILED LITHOLOGY']].rename(
+            columns={'WIDTH': 'THICKNESS (m)', 'DETAILED LITHOLOGY': 'LITHOLOGY DESCRIPTION'}
+        ).sort_values(by='FROM').reset_index(drop=True)
+        
+        # *** UPDATED STYLING: ONLY COAL SEAMS COLORED ***
+        def color_rows(s):
+            is_coal = s['LCODE'] in COAL_SEAM_LCODES
+            
+            # Apply color only if it's a coal seam, otherwise transparent/white
+            if is_coal:
+                color = SEAM_COLOR_MAP.get(s['LCODE'], DEFAULT_SEAM_COLOR)
+                # Use a very light shade for the background (e.g., opacity 25 or 40)
+                bg_color = color + '40'
+            else:
+                # White background for non-coal rows
+                bg_color = 'white' 
+                
+            return [f'background-color: {bg_color}' for _ in s]
+        
+        st.dataframe(
+            df_display.style.apply(color_rows, axis=1).format(
+                {'FROM': "{:.2f}", 'TO': "{:.2f}", 'INTERVAL (m)': "{:.2f}"}
+            ).set_properties(**{'text-align': 'left'}),
+            use_container_width=True
+        )
+
+
+
 
 # --- TAB 0: Data Management (Definition) ---
 def data_upload_tab():
@@ -808,21 +902,30 @@ with tab_litho_log:
     seam_list = COAL_SEAM_LCODES
     seam_list_with_none = ['None'] + seam_list
     st.header("Borehole Correlation")
+    
+    # Use the session state to get the list of selected boreholes from the multiselect
     selected_bhids = st.session_state.get('corr_bhid_select', [])
+    
     fig_map = plot_plan_view(st.session_state['df_bh'], st.session_state['df_boundary'], selected_bhids)
     st.plotly_chart(fig_map, use_container_width=True, key="correlation_map")
     st.markdown("---")
+    
     col1, col2, col3, col4 = st.columns([2.5, 1.5, 1.5, 1])
     with col1: selected_bhids = st.multiselect("1. Select Boreholes:", bhid_list, default=bhid_list[:1] if len(bhid_list) > 1 else bhid_list, key='corr_bhid_select')
     with col2: reference_seam = st.selectbox("2. Select Seam for Correlation:", seam_list_with_none, key='corr_reference_seam', help="Select 'None' for true elevation view. Select a seam to flatten the plot on that seam's floor.")
     with col3: selected_seams_lines = st.multiselect("3. Plot Correlation Lines for:", seam_list, key='corr_lines_select')
     with col4: st.write(""); st.write(""); filter_mode = st.radio("4. Lithology Filter:", ('All Lithology', 'Coal Seams Only'), key='corr_litho_filter')
+    
     if not selected_bhids: st.info("Please select at least one borehole to generate a correlation plot.")
     else:
         st.markdown("---")
         fig_corr, excluded = plot_litho_correlation(df_bh, df_litho, selected_bhids, selected_seams_lines, filter_mode, reference_seam)
         if excluded: st.warning(f"**Note:** Borehole(s) `{', '.join(excluded)}` were excluded from the plot as they do not contain the reference seam '{reference_seam}'.")
         st.plotly_chart(fig_corr, use_container_width=True, key="main_correlation_plot")
+        
+        # --- NEW CODE: LITHOLOGY TABLE INTEGRATION ---
+        display_lithology_table(df_litho, selected_bhids)
+        # --- END NEW CODE ---
 
 with tab_quality:
     if not litho_loaded: st.warning("Please upload Lithology data for thickness calculations and quality analysis."); st.stop()
@@ -874,7 +977,7 @@ with tab_quality:
                     total_non_coal_thickness = total_td - total_coal_thickness
                     st.metric(label="Total Coal Thickness (Cumulative)", value=f"{total_coal_thickness:,.2f} m")
                     st.metric(label="Total Non-Coal Thickness (Cumulative)", value=f"{total_non_coal_thickness:,.2f} m")
-        else: st.info("Please select borehole(s) or switch to 'Block-Wide Average'.")
+            else: st.info("Please select borehole(s) or switch to 'Block-Wide Average'.")
     
     with tab_analytics:
         if not quality_loaded: st.warning("Please upload Quality Data to enable analytics."); st.stop()
@@ -917,4 +1020,3 @@ with tab_quality:
             if not df_summary_table.empty:
                 st.subheader(f"Statistical Summary for {selected_param_d}")
                 st.dataframe(df_summary_table.style.set_properties(**{'text-align': 'left'}), use_container_width=True)
-
