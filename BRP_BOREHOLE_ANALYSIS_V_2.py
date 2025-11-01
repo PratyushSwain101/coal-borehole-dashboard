@@ -442,7 +442,6 @@ def preprocess_quality_data(df_litho, df_quality, df_bh, selected_seam, selected
         df_stats = pd.merge(df_stats, wavg_results, on='BHID', how='left')
     return df_stats
 
-
 # --- FUNCTION FOR QUALITY PLAN VIEW (Corrected Layout and Enhanced Hover Text) ---
 def plot_quality_plan_view(df_bh, df_boundary, df_quality, df_litho):
     
@@ -468,7 +467,7 @@ def plot_quality_plan_view(df_bh, df_boundary, df_quality, df_litho):
     with col_param:
         if not available_params:
             st.warning("No quality data columns found.")
-            return 
+            return
         selected_param_key = st.selectbox("3. Select Quality Parameter:", available_params, key='map_param_select')
         param_display_name = QUALITY_PARAMETERS.get(selected_param_key, selected_param_key)
 
@@ -538,22 +537,40 @@ def plot_quality_plan_view(df_bh, df_boundary, df_quality, df_litho):
         
         with col_highlight_mode:
             st.write(""); st.write(""); highlight_mode = st.radio("Highlight Boreholes:", ('None', 'In Range', 'Outside Range'), index=0, key='highlight_mode', horizontal=True)
-            
+        
         # The subsequent validation check can remain, but is less likely to trigger
         if min_val > max_val:
             st.error("Minimum value cannot be greater than Maximum value. Re-adjusting...")
             pass 
         
+        # --- START FIX FOR PRECISION ISSUE ---
+        
+        # Define a small tolerance (epsilon) for float comparisons
+        EPSILON = 0.00001
+        
+        # Ensure min_val and max_val are correctly ordered
+        actual_min = min(min_val, max_val)
+        actual_max = max(min_val, max_val)
+        
         if highlight_mode == 'In Range':
-            df_plot_data['Filtered'] = (df_plot_data[selected_param_key] >= min_val) & (df_plot_data[selected_param_key] <= max_val)
+            # Use >= (Min - EPSILON) and <= (Max + EPSILON) to be truly inclusive of float boundaries
+            df_plot_data['Filtered'] = (
+                (df_plot_data[selected_param_key] >= actual_min - EPSILON) & 
+                (df_plot_data[selected_param_key] <= actual_max + EPSILON)
+            )
         elif highlight_mode == 'Outside Range':
-            df_plot_data['Filtered'] = (df_plot_data[selected_param_key] < min_val) | (df_plot_data[selected_param_key] > max_val)
+            # Use strict < (Min - EPSILON) or > (Max + EPSILON)
+            df_plot_data['Filtered'] = (
+                (df_plot_data[selected_param_key] < actual_min - EPSILON) | 
+                (df_plot_data[selected_param_key] > actual_max + EPSILON)
+            )
         else:
             df_plot_data['Filtered'] = False
+            
+        # --- END FIX FOR PRECISION ISSUE ---
         
         st.markdown("---")
         
-
         # <<< HOVER TEMPLATE CODE (No change here) >>>
         param_short_name = param_display_name.split('(')[0].strip() # e.g. "Total Coal Seam Thickness"
         
@@ -647,11 +664,6 @@ def plot_quality_plan_view(df_bh, df_boundary, df_quality, df_litho):
                 st.subheader(f"Statistical Summary : ({selected_param_key})")
                 st.dataframe(df_summary.style.set_properties(**{'text-align': 'left'}), use_container_width=True)
                 st.markdown("---")
-
-
-
-
-
 
 
 # --- TAB 0: Data Management (Definition) ---
@@ -828,3 +840,4 @@ with tab_quality:
             if not df_summary_table.empty:
                 st.subheader(f"Statistical Summary for {selected_param_d}")
                 st.dataframe(df_summary_table.style.set_properties(**{'text-align': 'left'}), use_container_width=True)
+
