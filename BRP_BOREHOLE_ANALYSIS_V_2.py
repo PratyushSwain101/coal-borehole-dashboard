@@ -15,6 +15,15 @@ COAL_SEAM_LCODES = [
     'IBT', 'IBB'
 ]
 
+# Define the Parent-Daughter Mapping for Linked Correlation
+SEAM_SYSTEMS = {
+    'L2T1': ['L2T1T', 'L2T1B'],
+    'R5': ['R5T', 'R5B']
+}
+ALL_DAUGHTER_SEAMS = [d for sublist in SEAM_SYSTEMS.values() for d in sublist]
+ALL_PARENT_SEAMS = list(SEAM_SYSTEMS.keys())
+ALL_SYSTEM_SEAMS = ALL_PARENT_SEAMS + ALL_DAUGHTER_SEAMS
+
 # Standard Quality Parameters (Mapping uploaded column headers to display names)
 QUALITY_PARAMETERS = {
     'THICKNESS': 'Total Coal Seam Thickness (m)', # Special case: calculated from lithology
@@ -58,7 +67,7 @@ def get_litho_color(lcode):
 # --- STREAMLIT APP SETUP ---
 
 st.set_page_config(layout="wide")
-st.title("Burapahar Coal Project")
+st.title("BRP Coal Project")
 
 # Initialize Session State for file data 
 if 'df_bh' not in st.session_state:
@@ -186,6 +195,58 @@ def process_quality_data(uploaded_file):
     return None
 
 # --- CORE PLOTTING FUNCTIONS ---
+
+def plot_seam_stats(df_stats, title, y_axis_title, parameter, plot_type, selected_seams_d):
+    
+    if plot_type == 'Bar Chart':
+        df_plot = df_stats[df_stats['LCODE'].isin(COAL_SEAM_LCODES)].copy()
+        if df_plot.empty: return go.Figure().add_annotation(text="No data found for the selected criteria.", showarrow=False).update_layout(title_text=title, height=400), pd.DataFrame()
+        plot_col = 'AVERAGE_THICKNESS_M' if 'AVERAGE_THICKNESS_M' in df_plot.columns else parameter
+        df_plot = df_plot.rename(columns={'LCODE': 'COAL_SEAM', plot_col: 'VALUE'})
+        present_seams = df_plot['COAL_SEAM'].unique().tolist()
+        seam_plot_order = [seam for seam in COAL_SEAM_LCODES if seam in present_seams]
+        fig = px.bar(df_plot, x='COAL_SEAM', y='VALUE', title=title, labels={'VALUE': y_axis_title, 'COAL_SEAM': 'Coal Seam LCODE'}, color='COAL_SEAM', color_discrete_map=SEAM_COLOR_MAP, category_orders={"COAL_SEAM": seam_plot_order}, text='VALUE')
+        fig.update_traces(texttemplate='%{text:.2f}', textposition='outside')
+        y_max = df_plot['VALUE'].max() * 1.1 if not df_plot.empty and df_plot['VALUE'].max() > 0 else 10
+        fig.update_layout(xaxis={'categoryorder':'array'}, yaxis=dict(range=[0, y_max]), plot_bgcolor='white', paper_bgcolor='white', font=dict(color=PLOT_TEXT_COLOR), height=500, legend=dict(font=dict(size=10)))
+        df_summary = df_plot.rename(columns={'VALUE': y_axis_title})
+        df_summary['COAL_SEAM'] = pd.Categorical(df_summary['COAL_SEAM'], categories=COAL_SEAM_LCODES, ordered=True)
+        df_summary = df_summary.sort_values('COAL_SEAM')
+        df_summary['SEAM NAME'] = df_summary['COAL_SEAM']
+        df_summary = df_summary[['SEAM NAME', y_axis_title]]
+        df_summary[y_axis_title] = df_summary[y_axis_title].round(2)
+        return fig, df_summary
+    elif plot_type == 'Box Plot':
+        # NOTE: This uses RAW data (df_stats should contain LCODE, parameter, BHID)
+        df_plot_raw = df_stats[df_stats['LCODE'].isin(selected_seams_d)].copy()
+        if df_plot_raw.empty or parameter not in df_plot_raw.columns: return go.Figure().add_annotation(text=f"No raw data available for {parameter}.", showarrow=False).update_layout(title_text=title, height=500), pd.DataFrame()
+        df_plot_raw = df_plot_raw.dropna(subset=[parameter])
+        if df_plot_raw.empty: return go.Figure().add_annotation(text=f"No valid {parameter} samples found.", showarrow=False).update_layout(title_text=title, height=500), pd.DataFrame()
+        present_seams = df_plot_raw['LCODE'].unique().tolist()
+        seam_plot_order = [seam for seam in COAL_SEAM_LCODES if seam in present_seams]
+        df_plot_raw['COAL_SEAM'] = pd.Categorical(df_plot_raw['LCODE'], categories=seam_plot_order, ordered=True)
+        df_plot_raw = df_plot_raw.sort_values('COAL_SEAM')
+        df_summary_data = df_plot_raw.groupby('LCODE')[parameter].agg(['count', 'mean', 'median', 'min', 'max']).reset_index()
+        fig = px.box(df_plot_raw, x='COAL_SEAM', y=parameter, title=title, labels={parameter: y_axis_title, 'COAL_SEAM': 'Coal Seam LCODE'}, color='COAL_SEAM', category_orders={"COAL_SEAM": seam_plot_order}, color_discrete_map=SEAM_COLOR_MAP)
+        fig.update_traces(marker_size=5, line=dict(width=1))
+        for i, seam in enumerate(seam_plot_order):
+            stats = df_summary_data[df_summary_data['LCODE'] == seam]
+            if not stats.empty:
+                stats = stats.iloc[0]
+                fig.add_annotation(x=i, y=stats['median'], text=f"{stats['median']:.2f}", showarrow=False, textangle=-90, font=dict(size=10, color=PLOT_TEXT_COLOR), yshift=15, xanchor='center', yanchor='middle', bgcolor="rgba(255,255,255,0.8)", bordercolor='black', borderwidth=0.5)
+        y_data_min, y_data_max = df_summary_data['min'].min(), df_summary_data['max'].max()
+        y_range = y_data_max - y_data_min if y_data_max > y_data_min else 1
+        y_min_adj, y_max_adj = y_data_min - y_range * 0.1, y_data_max + y_range * 0.1  
+        fig.update_layout(plot_bgcolor='white', paper_bgcolor='white', font=dict(color=PLOT_TEXT_COLOR), height=600, yaxis=dict(range=[y_min_adj, y_max_adj]), xaxis=dict(tickangle=-45, categoryorder='array', categoryarray=seam_plot_order), legend=dict(font=dict(size=10)))
+        df_full_stats = df_plot_raw.groupby('LCODE')[parameter].agg(['count', 'mean', 'median', 'std', 'min', 'max']).reset_index()
+        df_full_stats.columns = ['SEAM NAME', 'Count', 'Mean', 'Median', 'Std Dev', 'Min', 'Max']
+        for col in ['Mean', 'Median', 'Std Dev', 'Min', 'Max']: df_full_stats[col] = df_full_stats[col].round(2)
+        df_full_stats['SEAM NAME'] = pd.Categorical(df_full_stats['SEAM NAME'], categories=seam_plot_order, ordered=True)
+        df_full_stats = df_full_stats.sort_values('SEAM NAME').dropna(subset=['SEAM NAME'])
+        return fig, df_full_stats
+    return go.Figure().add_annotation(text="Invalid Plot Type Selected.", showarrow=False), pd.DataFrame()
+
+
 def plot_plan_view(df_bh, df_boundary, selected_bhids=None):
     selected_bhids = selected_bhids if isinstance(selected_bhids, list) else ([selected_bhids] if selected_bhids else [])
     fig = go.Figure()
@@ -249,8 +310,7 @@ def plot_plan_view(df_bh, df_boundary, selected_bhids=None):
     
     fig.update_layout(
         xaxis_title="Easting (X) - UTM", yaxis_title="Northing (Y) - UTM", dragmode='pan',
-        yaxis=dict(scaleanchor="x", scaleratio=1), 
-        title_text="Borehole Locations & Block Boundary (Plan View)",
+        yaxis=dict(scaleanchor="x", scaleratio=1), title_text="Borehole Locations & Block Boundary (Plan View)",
         title_font=dict(color=PLOT_TEXT_COLOR), 
         font=dict(color=PLOT_TEXT_COLOR), 
         plot_bgcolor='white', # Optimized for Light Theme
@@ -273,11 +333,27 @@ def plot_litho_correlation(df_bh, df_litho, selected_bhids, selected_seams, filt
     is_flattened_mode = reference_seam and reference_seam != 'None'
     if is_flattened_mode:
         bh_offsets = {}
+        
+        # --- DATUM LOGIC: Use only the exact reference seam for the floor datum ---
+        ref_target_lcodes = [reference_seam]
+        
+        # NOTE: If a parent is selected as datum, use ALL components for composite datum floor
+        if reference_seam in ALL_PARENT_SEAMS:
+            ref_target_lcodes.extend(SEAM_SYSTEMS[reference_seam])
+                    
         for bhid in selected_bhids:
-            ref_seam_data = df_combined[(df_combined['BHID'] == bhid) & (df_combined['LCODE'] == reference_seam)]
-            if not ref_seam_data.empty: bh_offsets[bhid] = -ref_seam_data['TO RL'].min()
-            else: excluded_bhids.append(bhid)
-        plottable_bhids = [bhid for bhid in selected_bhids if bhid not in excluded_bhids]
+            # Filter data for the reference seam system (only the exact seam, or composite if parent)
+            ref_seam_data = df_combined[(df_combined['BHID'] == bhid) & (df_combined['LCODE'].isin(ref_target_lcodes))]
+            
+            # The reference point is the *absolute floor* (min TO RL) of the system
+            min_to_rl = ref_seam_data['TO RL'].min()
+            
+            if not ref_seam_data.empty and not pd.isna(min_to_rl): 
+                bh_offsets[bhid] = -min_to_rl
+            else: 
+                excluded_bhids.append(bhid)
+                
+            plottable_bhids = [bhid for bhid in selected_bhids if bhid not in excluded_bhids]
     else:
         bh_offsets = {bhid: 0 for bhid in selected_bhids}
         plottable_bhids = selected_bhids
@@ -294,7 +370,11 @@ def plot_litho_correlation(df_bh, df_litho, selected_bhids, selected_seams, filt
         bh_x_positions.append(bh_x_positions[-1] + distance * scale_multiplier)
     df_selected_bh['CUM_DISTANCE'] = bh_x_positions
 
-    df_plot_data = df_combined[df_combined['LCODE'].isin(COAL_SEAM_LCODES)].copy() if filter_mode == 'Coal Seams Only' else df_combined.copy()
+    # --- FILTERING DATA BASED ON 'filter_mode' ---
+    if filter_mode == 'Coal Seams Only':
+        df_plot_data = df_combined[df_combined['LCODE'].isin(COAL_SEAM_LCODES)].copy()
+    else:
+        df_plot_data = df_combined.copy()
 
     all_y_values, max_header_y, collar_y_coords = [], 0, []
     for _, row in df_selected_bh.iterrows():
@@ -310,49 +390,201 @@ def plot_litho_correlation(df_bh, df_litho, selected_bhids, selected_seams, filt
     max_y_range = max(max_header_y + HEADER_HEIGHT_OFFSET + 10, max_y_range)
         
     fig = go.Figure()
+    
+    # 1. Plot Lithology Bars and Annotations
     for i, row in df_selected_bh.iterrows():
         bhid, rl, final_depth, x_pos, y_offset = row['BHID'], row['RL'], row['DEPTH'], row['CUM_DISTANCE'], bh_offsets.get(row['BHID'], 0)
         df_litho_bh = df_plot_data[df_plot_data['BHID'] == bhid]
+        
+        # Total Depth Line (Hidden Bar)
         fig.add_trace(go.Bar(x=[x_pos], y=[final_depth], base=[rl - final_depth + y_offset], marker=dict(color='rgba(0,0,0,0)', line=dict(color='black', width=1.0)), orientation='v', width=BAR_WIDTH_VISUAL, hoverinfo='skip', showlegend=False))
+        
+        # Lithology Intervals (Stacked Bars)
         if not df_litho_bh.empty:
             df_litho_bh['COLOR'] = df_litho_bh['LCODE'].apply(get_litho_color)
             hover_text_series = ('BHID: ' + bhid + '<br>' + 'RL: ' + df_litho_bh['FROM RL'].round(2).astype(str) + ' to ' + df_litho_bh['TO RL'].round(2).astype(str) + ' m<br>' + 'From Depth: ' + df_litho_bh['FROM'].round(2).astype(str) + ' m<br>' + 'To Depth: ' + df_litho_bh['TO'].round(2).astype(str) + ' m<br>' + 'Width: ' + df_litho_bh['WIDTH'].round(2).astype(str) + ' m<br>' + 'LCODE: ' + df_litho_bh['LCODE'] + '<br>' + 'Detailed Lithology: ' + df_litho_bh['DETAILED LITHOLOGY'])
-            fig.add_trace(go.Bar(x=[x_pos] * len(df_litho_bh), y=df_litho_bh['RL_WIDTH'], base=df_litho_bh['TO RL'] + y_offset, marker=dict(color=df_litho_bh['COLOR'], line=dict(color='black', width=1.0)), text=df_litho_bh['LCODE'], textposition='inside', textfont=dict(color=PLOT_TEXT_COLOR, size=9), orientation='v', width=BAR_WIDTH_VISUAL, hoverinfo='text', hovertext=hover_text_series, showlegend=False))
+            
+            # RECTIFIED TRACE: Removed the invalid `legendgroup` assignment
+            fig.add_trace(go.Bar(
+                x=[x_pos] * len(df_litho_bh), 
+                y=df_litho_bh['RL_WIDTH'], 
+                base=df_litho_bh['TO RL'] + y_offset, 
+                marker=dict(color=df_litho_bh['COLOR'], line=dict(color='black', width=1.0)), 
+                text=df_litho_bh['LCODE'], 
+                textposition='inside', 
+                textfont=dict(color=PLOT_TEXT_COLOR, size=9), 
+                orientation='v', 
+                width=BAR_WIDTH_VISUAL, 
+                hoverinfo='text', 
+                hovertext=hover_text_series, 
+                showlegend=False, # We use the dummy traces for the legend
+            ))
+        
+        # Borehole Header Annotation
         fig.add_annotation(x=x_pos, y=max_header_y + HEADER_HEIGHT_OFFSET, text=f"<b>{bhid}</b><br>RL: {rl:.1f}<br>TD: {final_depth:.1f} m", showarrow=False, font=dict(color=PLOT_TEXT_COLOR, size=10), xanchor='center', yanchor='bottom')
+        
+        # Depth Ticks (Right Side of Log)
         seam_boundaries_rl = df_combined[df_combined['LCODE'].isin(COAL_SEAM_LCODES) & (df_combined['BHID'] == bhid)][['FROM RL', 'TO RL']].stack().unique().tolist()
         seam_boundaries_rl.append(rl - final_depth)
         unique_rls_to_label = sorted(list(set([r for r in seam_boundaries_rl if r <= rl + 0.1])), reverse=True)
         for rl_tick in unique_rls_to_label:
             fig.add_annotation(x=x_pos + BAR_WIDTH_VISUAL / 2 + 5, y=rl_tick + y_offset, text=f"{(rl - rl_tick):.2f} m", showarrow=False, font=dict(color=PLOT_TEXT_COLOR, size=8), xanchor='left', yanchor='middle')
 
-    if selected_seams and selected_seams != ['None']:
-        for idx, s_seam in enumerate(selected_seams):
-            if s_seam == 'None': continue
-            line_color = CORRELATION_COLORS[idx % len(CORRELATION_COLORS)]
-            x_coords, y_top, y_bottom = [], [], []
-            for _, bh_row in df_selected_bh.iterrows():
-                bhid, dist, offset = bh_row['BHID'], bh_row['CUM_DISTANCE'], bh_offsets.get(bh_row['BHID'], 0)
-                seam_data = df_combined[(df_combined['BHID'] == bhid) & (df_combined['LCODE'] == s_seam)]
-                if not seam_data.empty: x_coords.append(dist); y_top.append(seam_data['FROM RL'].max() + offset); y_bottom.append(seam_data['TO RL'].min() + offset)
-            if len(x_coords) > 1:
-                fig.add_trace(go.Scatter(x=x_coords, y=y_top, mode='lines+markers', line=dict(color=line_color, width=1), name=f'{s_seam} Top', showlegend=True))
-                fig.add_trace(go.Scatter(x=x_coords, y=y_bottom, mode='lines+markers', line=dict(color=line_color, width=1, dash='dot'), name=f'{s_seam} Bottom', showlegend=True))
+    # 2. Implement LINKED Seam Correlation Line Logic (Visual Grouping & Composite Envelope)
+    
+    seams_to_plot_lines = set()
+    systems_to_plot_composite = set()
+    
+    # 2a. Determine the final set of LCODEs to plot based on user selection
+    for s_seam in selected_seams:
+        # 1. Plot the individual selected seam
+        seams_to_plot_lines.add(s_seam)
+        
+        # 2. If part of a split system is selected, mark the parent for COMPOSITE tracing
+        if s_seam in ALL_PARENT_SEAMS:
+            systems_to_plot_composite.add(s_seam)
+            for daughter in SEAM_SYSTEMS[s_seam]:
+                seams_to_plot_lines.add(daughter)
+        elif s_seam in ALL_DAUGHTER_SEAMS:
+            for parent, daughters in SEAM_SYSTEMS.items():
+                if s_seam in daughters:
+                    systems_to_plot_composite.add(parent)
+                    # Add all other components for tracing
+                    seams_to_plot_lines.add(parent)
+                    for daughter in daughters:
+                         seams_to_plot_lines.add(daughter)
+                    break 
+                
+    
+    # Use a dictionary to store traces to ensure consistent color mapping
+    plot_traces = {}
+    
+    # 2b. Plot COMPOSITE ENVELOPES first (Solid line)
+    for parent_seam in sorted(list(systems_to_plot_composite)): 
+        line_color = SEAM_COLOR_MAP.get(parent_seam, 'black') # Use the parent seam's color
+        x_coords, y_top_composite, y_bottom_composite = [], [], []
+        
+        # Target all components of the system
+        target_lcodes = [parent_seam] + SEAM_SYSTEMS[parent_seam]
+        
+        for _, bh_row in df_selected_bh.iterrows():
+            bhid, dist, offset = bh_row['BHID'], bh_row['CUM_DISTANCE'], bh_offsets.get(bh_row['BHID'], 0)
+            
+            seam_data = df_combined[(df_combined['BHID'] == bhid) & (df_combined['LCODE'].isin(target_lcodes))]
+            
+            if not seam_data.empty: 
+                # COMPOSITE ROOF/FLOOR: Max FROM RL and Min TO RL of all components
+                y_top_composite.append(seam_data['FROM RL'].max() + offset); 
+                y_bottom_composite.append(seam_data['TO RL'].min() + offset)
+                x_coords.append(dist)
+        
+        if len(x_coords) > 1:
+            plot_traces[f'{parent_seam}_COMPOSITE_TOP'] = go.Scatter(
+                x=x_coords, y=y_top_composite, mode='lines+markers', 
+                line=dict(color=line_color, width=3, dash='solid'), 
+                name=f'{parent_seam} Composite Roof', showlegend=True,
+                legendgroup=parent_seam
+            )
+            plot_traces[f'{parent_seam}_COMPOSITE_BOTTOM'] = go.Scatter(
+                x=x_coords, y=y_bottom_composite, mode='lines+markers', 
+                line=dict(color=line_color, width=3, dash='dashdot'), # Slightly different dash for floor
+                name=f'{parent_seam} Composite Floor', showlegend=True,
+                legendgroup=parent_seam
+            )
+            
+    # 2c. Plot INDIVIDUAL SEAM LINES (Daughter or Non-split Seams)
+    for s_seam in sorted(list(seams_to_plot_lines)): 
+        if s_seam in systems_to_plot_composite:
+            # Skip plotting the individual parent LCODE if its composite is already plotted (avoids duplication)
+            continue
+            
+        if s_seam == 'None' or s_seam not in COAL_SEAM_LCODES: continue
+        
+        line_color = SEAM_COLOR_MAP.get(s_seam, 'black')
+        x_coords, y_top, y_bottom = [], [], []
+        
+        # Target LCODE for visualization is now ALWAYS just the seam itself
+        target_lcodes = [s_seam]
+        
+        dash_style = 'dot' if s_seam in ALL_DAUGHTER_SEAMS else 'solid'
+        legend_name = f'{s_seam} Top/Bottom'
+        
+        for _, bh_row in df_selected_bh.iterrows():
+            bhid, dist, offset = bh_row['BHID'], bh_row['CUM_DISTANCE'], bh_offsets.get(bh_row['BHID'], 0)
+            
+            seam_data = df_combined[(df_combined['BHID'] == bhid) & (df_combined['LCODE'].isin(target_lcodes))]
+            
+            if not seam_data.empty: 
+                # Individual Roof/Floor: Max FROM RL and Min TO RL of the single seam
+                y_top.append(seam_data['FROM RL'].max() + offset); 
+                y_bottom.append(seam_data['TO RL'].min() + offset)
+                x_coords.append(dist)
+                
+        # Plot the lines
+        if len(x_coords) > 1:
+            plot_traces[f'{s_seam}_TOP'] = go.Scatter(x=x_coords, y=y_top, mode='lines+markers', line=dict(color=line_color, width=1, dash=dash_style), name=legend_name, showlegend=True, legendgroup=s_seam)
+            plot_traces[f'{s_seam}_BOTTOM'] = go.Scatter(x=x_coords, y=y_bottom, mode='lines+markers', line=dict(color=line_color, width=1, dash=dash_style), name=legend_name, showlegend=False, legendgroup=s_seam)
+
+
+    # Add all calculated traces to the figure
+    for trace in plot_traces.values():
+        fig.add_trace(trace)
+            
+    # 3. Plot Surface Profile (if not flattened)
     if not is_flattened_mode and len(collar_y_coords) > 1:
         x_c, y_c = zip(*collar_y_coords); fig.add_trace(go.Scatter(x=list(x_c), y=list(y_c), mode='lines', line=dict(color='blue', width=2, dash='dash'), name='Surface Profile', showlegend=True))
 
+    # 4. Final Layout Configuration
+
+    # --- START FIX: DUMMY TRACES FOR LITHOLOGY LEGEND ---
+    # Determine the unique LCODEs present in the current plot data (Coal or All Lithology)
+    if not df_plot_data.empty:
+        # Get all unique LCODEs that actually appear in the plotted bars
+        unique_plotted_lcodes = df_plot_data['LCODE'].unique().tolist()
+    else:
+        unique_plotted_lcodes = []
+    
+    # Sort Coal Seams by COAL_SEAM_LCODES order
+    unique_coal_lcodes = [lcode for lcode in COAL_SEAM_LCODES if lcode in unique_plotted_lcodes]
+    
+    # Non-Coal LCODEs that are currently plotted (only relevant if filter_mode != 'Coal Seams Only')
+    unique_non_coal_lcodes = [lcode for lcode in unique_plotted_lcodes if lcode not in COAL_SEAM_LCODES]
+
+    # Add dummy trace for COAL SEAMS (Mandatory for Legend)
+    for lcode in unique_coal_lcodes:
+        # Use go.Bar with opacity 0 to ensure the color box is correct and toggleable
+        fig.add_trace(go.Bar(
+            x=[None], y=[None],
+            marker=dict(color=get_litho_color(lcode), line=dict(color='black', width=1)),
+            name=lcode,
+            showlegend=True,
+            legendgroup='Lithology_Coal', # Use consistent group name
+            visible='legendonly' # Hide the trace itself, but keep the legend item
+        ))
+
+    # Add dummy trace for NON-COAL SEAMS (Only if filter is 'All Lithology')
+    if filter_mode != 'Coal Seams Only':
+        for lcode in unique_non_coal_lcodes:
+             fig.add_trace(go.Bar(
+                 x=[None], y=[None],
+                 marker=dict(color=NON_COAL_COLOR, line=dict(color='black', width=1)),
+                 name=lcode,
+                 showlegend=True,
+                 legendgroup='Lithology_NonCoal', # Use consistent group name
+                 visible='legendonly'
+             ))
+
+    # --- END FIX: DUMMY TRACES FOR LITHOLOGY LEGEND ---
+
+    # 5. Final Layout Configuration (Cont.)
     if is_flattened_mode:
         title, yaxis_title = f"Seam Correlation (Datum: Floor of '{reference_seam}')", "Relative Elevation from Datum (m)"
         yaxis_config = dict(title=yaxis_title, showticklabels=True, showgrid=True, zeroline=True, zerolinecolor='red', zerolinewidth=2, range=[min_y_range, max_y_range])
     else:
         title, yaxis_title = "Geological Correlation (True Elevation)", "Elevation (RL) above MSL (m)"
         yaxis_config = dict(title=yaxis_title, showgrid=True, zeroline=True, zerolinecolor=PLOT_TEXT_COLOR, range=[min_y_range, max_y_range])
-
-    # Filter legend items based on what is actually plotted
-    df_legend_data = df_plot_data[df_plot_data['BHID'].isin(plottable_bhids)].copy()
-    if not df_legend_data.empty:
-        lcode_shallowest = df_legend_data.groupby('LCODE')['RL'].max().sort_values(ascending=False).index.tolist()
-        for lcode in lcode_shallowest:
-            fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(size=10, color=get_litho_color(lcode), line=dict(width=1, color='black')), name=lcode, showlegend=True))
+    
+    # We remove the old custom lithology legend logic at the end since we use the dummy traces now
     
     fig.update_layout(
         title_text=title, title_font=dict(size=16),
@@ -365,61 +597,6 @@ def plot_litho_correlation(df_bh, df_litho, selected_bhids, selected_seams, filt
         margin=dict(l=50, r=100, t=100, b=50)
     )
     return fig, excluded_bhids
-
-def plot_seam_stats(df_stats, title, y_axis_title, parameter, plot_type, selected_seams_d):
-    if plot_type == 'Bar Chart':
-        df_plot = df_stats[df_stats['LCODE'].isin(COAL_SEAM_LCODES)].copy()
-        if df_plot.empty: return go.Figure().add_annotation(text="No data found for the selected criteria.", showarrow=False).update_layout(title_text=title, height=400), pd.DataFrame()
-        plot_col = 'AVERAGE_THICKNESS_M' if 'AVERAGE_THICKNESS_M' in df_plot.columns else parameter
-        df_plot = df_plot.rename(columns={'LCODE': 'COAL_SEAM', plot_col: 'VALUE'})
-        present_seams = df_plot['COAL_SEAM'].unique().tolist()
-        seam_plot_order = [seam for seam in COAL_SEAM_LCODES if seam in present_seams]
-        fig = px.bar(df_plot, x='COAL_SEAM', y='VALUE', title=title, labels={'VALUE': y_axis_title, 'COAL_SEAM': 'Coal Seam LCODE'}, color='COAL_SEAM', color_discrete_map=SEAM_COLOR_MAP, category_orders={"COAL_SEAM": seam_plot_order}, text='VALUE')
-        fig.update_traces(texttemplate='%{text:.2f}', textposition='outside')
-        y_max = df_plot['VALUE'].max() * 1.1 if not df_plot.empty and df_plot['VALUE'].max() > 0 else 10
-        fig.update_layout(
-            xaxis={'categoryorder':'array'}, yaxis=dict(range=[0, y_max]), 
-            plot_bgcolor='white', 
-            paper_bgcolor='white', 
-            font=dict(color=PLOT_TEXT_COLOR), height=500, legend=dict(font=dict(size=10)))
-        df_summary = df_plot.rename(columns={'VALUE': y_axis_title})
-        df_summary['COAL_SEAM'] = pd.Categorical(df_summary['COAL_SEAM'], categories=COAL_SEAM_LCODES, ordered=True)
-        df_summary = df_summary.sort_values('COAL_SEAM')
-        df_summary['SEAM NAME'] = df_summary['COAL_SEAM']
-        df_summary = df_summary[['SEAM NAME', y_axis_title]]
-        df_summary[y_axis_title] = df_summary[y_axis_title].round(2)
-        return fig, df_summary
-    elif plot_type == 'Box Plot':
-        df_plot_raw = df_stats[df_stats['LCODE'].isin(selected_seams_d)].copy()
-        if df_plot_raw.empty or parameter not in df_plot_raw.columns: return go.Figure().add_annotation(text=f"No raw data available for {parameter}.", showarrow=False).update_layout(title_text=title, height=500), pd.DataFrame()
-        df_plot_raw = df_plot_raw.dropna(subset=[parameter])
-        if df_plot_raw.empty: return go.Figure().add_annotation(text=f"No valid {parameter} samples found.", showarrow=False).update_layout(title_text=title, height=500), pd.DataFrame()
-        present_seams = df_plot_raw['LCODE'].unique().tolist()
-        seam_plot_order = [seam for seam in COAL_SEAM_LCODES if seam in present_seams]
-        df_plot_raw['COAL_SEAM'] = pd.Categorical(df_plot_raw['LCODE'], categories=seam_plot_order, ordered=True)
-        df_plot_raw = df_plot_raw.sort_values('COAL_SEAM')
-        df_summary_data = df_plot_raw.groupby('LCODE')[parameter].agg(['count', 'mean', 'median', 'min', 'max']).reset_index()
-        fig = px.box(df_plot_raw, x='COAL_SEAM', y=parameter, title=title, labels={parameter: y_axis_title, 'COAL_SEAM': 'Coal Seam LCODE'}, color='COAL_SEAM', category_orders={"COAL_SEAM": seam_plot_order}, color_discrete_map=SEAM_COLOR_MAP)
-        fig.update_traces(marker_size=5, line=dict(width=1))
-        for i, seam in enumerate(seam_plot_order):
-            stats = df_summary_data[df_summary_data['LCODE'] == seam]
-            if not stats.empty:
-                stats = stats.iloc[0]
-                fig.add_annotation(x=i, y=stats['median'], text=f"{stats['median']:.2f}", showarrow=False, textangle=-90, font=dict(size=10, color=PLOT_TEXT_COLOR), yshift=15, xanchor='center', yanchor='middle', bgcolor="rgba(255,255,255,0.8)", bordercolor='black', borderwidth=0.5)
-        y_data_min, y_data_max = df_summary_data['min'].min(), df_summary_data['max'].max()
-        y_range = y_data_max - y_data_min if y_data_max > y_data_min else 1
-        y_min_adj, y_max_adj = y_data_min - y_range * 0.1, y_data_max + y_range * 0.1  
-        fig.update_layout(
-            plot_bgcolor='white', 
-            paper_bgcolor='white', 
-            font=dict(color=PLOT_TEXT_COLOR), height=600, yaxis=dict(range=[y_min_adj, y_max_adj]), xaxis=dict(tickangle=-45, categoryorder='array', categoryarray=seam_plot_order), legend=dict(font=dict(size=10)))
-        df_full_stats = df_plot_raw.groupby('LCODE')[parameter].agg(['count', 'mean', 'median', 'std', 'min', 'max']).reset_index()
-        df_full_stats.columns = ['SEAM NAME', 'Count', 'Mean', 'Median', 'Std Dev', 'Min', 'Max']
-        for col in ['Mean', 'Median', 'Std Dev', 'Min', 'Max']: df_full_stats[col] = df_full_stats[col].round(2)
-        df_full_stats['SEAM NAME'] = pd.Categorical(df_full_stats['SEAM NAME'], categories=seam_plot_order, ordered=True)
-        df_full_stats = df_full_stats.sort_values('SEAM NAME').dropna(subset=['SEAM NAME'])
-        return fig, df_full_stats
-    return go.Figure().add_annotation(text="Invalid Plot Type Selected.", showarrow=False), pd.DataFrame()
 
 def plot_quality_crossplot(df_quality, selected_seam, selected_sample_type, x_param, y_param):
     if df_quality is None or x_param not in df_quality.columns or y_param not in df_quality.columns: return go.Figure().add_annotation(text=f"Quality data not loaded or missing columns: {x_param} and/or {y_param}.", showarrow=False)
@@ -440,29 +617,78 @@ def plot_quality_crossplot(df_quality, selected_seam, selected_sample_type, x_pa
             fig.add_annotation(x=df_plot[x_param].max(), y=df_plot[y_param].min(), text=f"<b>Eq:</b> {equation}<br><b>R²:</b> {r_sq:.3f}", showarrow=False, xref="x", yref="y", xanchor='right', yanchor='bottom', bgcolor="rgba(255, 255, 255, 0.8)", bordercolor="black", borderwidth=1, font=dict(size=10))
         except Exception as e: st.caption(f"Note: Could not calculate regression line. Error: {e}")
     
-    fig.update_layout(
-        plot_bgcolor='white', 
-        paper_bgcolor='white', 
-        font=dict(color=PLOT_TEXT_COLOR), height=600, hovermode='closest', coloraxis_colorbar=dict(title="Sample Interval (m)"), legend=dict(font=dict(size=10)))
+    fig.update_layout(plot_bgcolor='white', paper_bgcolor='white', font=dict(color=PLOT_TEXT_COLOR), height=600, hovermode='closest', coloraxis_colorbar=dict(title="Sample Interval (m)"), legend=dict(font=dict(size=10)))
     return fig
 
 def preprocess_quality_data(df_litho, df_quality, df_bh, selected_seam, selected_sample_type):
-    df_thickness = df_litho[df_litho['LCODE'] == selected_seam].groupby('BHID')['WIDTH'].sum().reset_index()
+    # --- LOGIC REMAINS FIXED: ONLY USES THE EXACT SELECTED SEAM FOR THICKNESS/QUALITY (FOR MAP VIEW) ---
+    
+    # Thickness calculation now only uses the exact selected seam LCODE.
+    target_lcodes = [selected_seam] 
+    
+    df_thickness = df_litho[df_litho['LCODE'].isin(target_lcodes)].groupby('BHID')['WIDTH'].sum().reset_index()
     df_thickness.columns = ['BHID', 'THICKNESS']
+    
     df_stats = pd.merge(df_bh[['BHID', 'X', 'Y', 'RL']].copy(), df_thickness, on='BHID', how='left')
     df_stats['THICKNESS'] = df_stats['THICKNESS'].fillna(0)
+    
     if df_quality is not None:
         def calculate_wavg_for_seam(df, parameter):
             if df['INTERVAL'].sum() == 0 or (df[parameter] * df['INTERVAL']).isnull().all(): return np.nan
             return (df[parameter] * df['INTERVAL']).sum() / df['INTERVAL'].sum()
+        
         quality_cols = [col for col in df_quality.columns if col in QUALITY_PARAMETERS and col != 'THICKNESS']
+        
+        # Quality data is also filtered only by the exact LCODE for weighted average.
         df_quality_seam = df_quality[df_quality['LCODE'] == selected_seam].copy()
+        
         if selected_sample_type and selected_sample_type != 'All Samples':
             df_quality_seam = df_quality_seam[df_quality_seam['SAMPLE_TYPE'] == selected_sample_type].copy()
-        wavg_results = df_quality_seam.groupby('BHID').apply(lambda x: pd.Series({col: calculate_wavg_for_seam(x, col) for col in quality_cols})).reset_index()
+            
+        # --- FIX: Ensure 'BHID' is the column name after reset_index() ---
+        # 1. Group and apply to get weighted averages (BHID is the index)
+        wavg_results = df_quality_seam.groupby('BHID').apply(lambda x: pd.Series({col: calculate_wavg_for_seam(x, col) for col in quality_cols}))
+        
+        # 2. Explicitly name the index before resetting to ensure the column is named 'BHID'
+        wavg_results.index.name = 'BHID'
+        wavg_results = wavg_results.reset_index()
+        # --- END FIX ---
+
         df_stats = pd.merge(df_stats, wavg_results, on='BHID', how='left')
+        
     return df_stats
 
+
+def calculate_quality_stats_data(df_quality, selected_param, selected_sample_type, bh_ids_to_analyze):
+    """
+    Calculates the **Arithmetic Average (Mean)** of a quality parameter for each coal seam, 
+    scoped by selected boreholes or the entire block.
+    """
+    if df_quality is None or selected_param not in df_quality.columns:
+        return pd.DataFrame()
+
+    # 1. Filter quality data by selected boreholes and coal seams only
+    df_filtered = df_quality[
+        (df_quality['LCODE'].isin(COAL_SEAM_LCODES)) & 
+        (df_quality['BHID'].isin(bh_ids_to_analyze))
+    ].copy()
+
+    # 2. Filter by sample type and drop NaNs in the selected parameter
+    if selected_sample_type != 'All Samples':
+        df_filtered = df_filtered[df_filtered['SAMPLE_TYPE'] == selected_sample_type].copy()
+        
+    df_filtered.dropna(subset=[selected_param], inplace=True)
+
+    if df_filtered.empty:
+        return pd.DataFrame()
+
+    # 3. Final aggregation: Calculate the simple ARITHMETIC MEAN (Average) for each seam (LCODE)
+    
+    df_summary_calc = df_filtered.groupby('LCODE').agg(
+        **{selected_param: (selected_param, 'mean')} # Simple Mean (Average)
+    ).reset_index()
+    
+    return df_summary_calc
 
 # --- FUNCTION FOR QUALITY PLAN VIEW (WITH ALL FIXES AND NEW TABLE) ---
 def plot_quality_plan_view(df_bh, df_boundary, df_quality, df_litho):
@@ -501,8 +727,8 @@ def plot_quality_plan_view(df_bh, df_boundary, df_quality, df_litho):
         secondary_display_name = QUALITY_PARAMETERS.get(selected_secondary_key, selected_secondary_key)
 
     with col_colorscale:
-        sequential_colorscales = sorted(['Viridis', 'Plasma', 'Inferno', 'Magma', 'Cividis', 'Turbo', 'Jet', 'Hot', 'Electric', 'Portland', 'Blackbody'])
-        selected_colorscale = st.selectbox("5. Select Color Scale:", sequential_colorscales, index=0, key='map_colorscale_select')
+        sequential_colorscales = (['Viridis', 'Plasma', 'Inferno', 'Magma', 'Cividis', 'Turbo', 'Jet', 'Hot', 'Electric', 'Portland', 'Blackbody'])
+        selected_colorscale = st.selectbox("5. Select Color Scale:", sequential_colorscales[:], index=9, key='map_colorscale_select')
 
     # Preprocess/Aggregate data 
     df_analyzed = preprocess_quality_data(df_litho, df_quality, df_bh, selected_seam, selected_sample_type)
@@ -666,15 +892,16 @@ def plot_quality_plan_view(df_bh, df_boundary, df_quality, df_litho):
             df_plot_data['SECONDARY_LABEL'] = df_plot_data.apply(format_secondary_label, axis=1)
 
             # Define offset for the text to sit next to the marker
-            label_x_offset = 100 
+            label_x_offset = 40 
+            label_y_offset = 60
             
             fig.add_trace(
                 go.Scatter(
                     x=df_plot_data['X'] + label_x_offset, 
-                    y=df_plot_data['Y'], 
+                    y=df_plot_data['Y'] + label_y_offset, 
                     mode='text', 
                     text=df_plot_data['SECONDARY_LABEL'], 
-                    textposition="middle left",
+                    # textposition="middle left",
                     textfont=dict(size=9, color='darkgreen'), 
                     name=f'{selected_secondary_key} Labels',
                     showlegend=False, 
@@ -683,84 +910,142 @@ def plot_quality_plan_view(df_bh, df_boundary, df_quality, df_litho):
                 )
             )
         
-        # 3. Highlight Filtered Boreholes (Red Ring)
+        # 3. Highlight Filtered Boreholes (Colored with Highlighting Info)
         if highlight_mode != 'None':
-            df_highlight = df_plot_data[df_plot_data['Filtered']]
+            # Filter the data for highlighted boreholes
+            df_highlight = df_plot_data[df_plot_data['Filtered']].copy()
+
             if not df_highlight.empty:
-                fig.add_trace(go.Scatter(x=df_highlight['X'], y=df_highlight['Y'], mode='markers', marker=dict(size=10, color='rgba(255, 0, 0, 0)', symbol='circle', line=dict(width=3, color='red')), name=f'Highlighted ({len(df_highlight)})', hoverinfo='skip', showlegend=True, legendgroup='highlight'))
-                fig.add_trace(go.Scatter(x=df_highlight['X'], y=df_highlight['Y'] - 60, mode='text', text=df_highlight['BHID'], textposition="bottom center", textfont=dict(size=8, color='red'), showlegend=False, hoverinfo='skip', legendgroup='highlight'))
-    else: 
-        st.info(f"No non-zero data for {param_display_name} in seam {selected_seam} for sample type {selected_sample_type}.")
-    
-    # 4. Add Block Boundary
-    fig.add_trace(go.Scatter(
-        x=df_boundary['X'], y=df_boundary['Y'], mode='lines', line=dict(color='red', width=1, dash='dash'),
-        name='Block Boundary', hovertemplate='Boundary Point<extra></extra>', showlegend=True
-    ))
-    
-    # 5. Final Layout 
-    fig.update_layout(
-        xaxis_title="Easting (X) - UTM", yaxis_title="Northing (Y) - UTM", dragmode='pan', yaxis=dict(scaleanchor="x", scaleratio=1),
-        title_text=f"Plan View: {param_display_name} Distribution in Seam {selected_seam} ({selected_sample_type})",
-        plot_bgcolor='white', # Optimized for Light Theme
-        paper_bgcolor='white', # Optimized for Light Theme
-        hovermode="closest", height=700,
-        font=dict(color=PLOT_TEXT_COLOR),
-        margin=dict(l=50, r=250, t=80, b=50), 
-        legend=dict(font=dict(size=10), x=1.1, y=1, yanchor='top', xanchor='left', bgcolor="rgba(255,255,255,0.8)", bordercolor="black", borderwidth=1)
-    )
+                
+                # Add an annotation to the legend to signify the filter mode
+                fig.add_trace(
+                    go.Scatter(
+                        x=[None],
+                        y=[None],  # Invisible trace just for the legend entry
+                        marker=dict(
+                            size=10,
+                            color='red',
+                            symbol='circle',
+                            line=dict(width=3, color='red')
+                        ),
+                        name=f'Highlighted ({len(df_highlight)}) - {highlight_mode}',
+                        showlegend=True,
+                        legendgroup='highlight'
+                    )
+                )
 
-    st.plotly_chart(fig, use_container_width=True)
+                # Scatter trace for the highlighted points, inheriting color/hover logic
+                fig.add_trace(
+                    go.Scatter(
+                        x=df_highlight['X'],
+                        y=df_highlight['Y'],
+                        mode='markers',
+                        marker=dict(
+                            size=10,
+                            color=df_highlight[selected_param_key],
+                            colorscale=selected_colorscale,
+                            colorbar=dict(
+                                title=f'{param_display_name} in {selected_seam} ({selected_sample_type})',
+                                title_side='right'
+                            ),
+                            showscale=False, cmin=param_min_data, cmax=param_max_data,
+                            line=dict(width=3, color='red')  # Red border for highlight
+                        ),
+                        name=f'Highlighted Points - {highlight_mode}',
+                        hovertemplate=hover_template,
+                        customdata=df_highlight[['BHID', 'RL', 'DEPTH', 'SEAM_FROM', 'SEAM_TO']],
+                        showlegend=False,
+                        legendgroup='highlight'
+                    )
+                )
 
+                # Add BHID labels for highlighted points (in red)
+                fig.add_trace(
+                    go.Scatter(
+                        x=df_highlight['X'],
+                        y=df_highlight['Y'] + bh_label_y_offset,
+                        mode='text',
+                        text=df_highlight['BHID'],
+                        textposition="bottom center",
+                        textfont=dict(size=8, color='red'),
+                        showlegend=False,
+                        hoverinfo='skip',
+                        legendgroup='highlight'
+                    )
+                )
 
-    # Statistical Summary Table (Existing Block)
-    if not df_plot_data.empty:
-        data_to_summarize = df_plot_data[selected_param_key].dropna()
-        if not data_to_summarize.empty:
-            summary_data = {
-                'Metric': ['Boreholes Plotted (n)', 'Minimum Value', 'Maximum Value', 'Average (Mean)', 'Median'],
-                'Value': [len(data_to_summarize), f"{data_to_summarize.min():.2f}", f"{data_to_summarize.max():.2f}", f"{data_to_summarize.mean():.2f}", f"{data_to_summarize.median():.2f}"]
-            }
-            df_summary = pd.DataFrame(summary_data).set_index('Metric')
-            with st.container():
-                st.subheader(f"Statistical Summary : ({selected_param_key})")
-                st.dataframe(df_summary.style.set_properties(**{'text-align': 'left'}), use_container_width=True)
-                st.markdown("---")
+            else:
+                st.info(f"No boreholes found **{highlight_mode.lower()}** the range of {min_val:.2f} to {max_val:.2f}.")
 
-
-    # --- START NEW FEATURE: HIGHLIGHTED BOREHOLES SUMMARY TABLE ---
-    if highlight_mode != 'None' and not df_plot_data.empty:
-        df_highlight = df_plot_data[df_plot_data['Filtered']].copy()
         
-        if not df_highlight.empty:
-            
-            # 1. Create the summary dataframe
-            df_summary_highlight = df_highlight[['BHID', selected_param_key]].copy()
-            df_summary_highlight.columns = ['BHID', 'Value']
-            
-            # 2. Add static contextual information
-            df_summary_highlight.insert(1, 'Seam', selected_seam)
-            df_summary_highlight.insert(2, 'Sample Type', selected_sample_type)
-            df_summary_highlight.insert(3, 'Parameter', QUALITY_PARAMETERS.get(selected_param_key, selected_param_key).split('(')[0].strip()) # Use short name
-            
-            # 3. Rename the Value column for clarity in the table
-            param_unit_match = QUALITY_PARAMETERS.get(selected_param_key, selected_param_key)
-            param_unit = param_unit_match[param_unit_match.find('(') : param_unit_match.find(')')+1] if '(' in param_unit_match else ''
-            df_summary_highlight = df_summary_highlight.rename(columns={'Value': f'Value {param_unit}'})
-            
-            st.markdown("---")
-            st.subheader(f"Highlighted Boreholes Summary: **{highlight_mode}** ({len(df_highlight)} BHs)")
-            
-            # Display the table
-            st.dataframe(
-                df_summary_highlight.style.format({f'Value {param_unit}': "{:.2f}"}).set_properties(**{'text-align': 'left'}), 
-                use_container_width=True
-            )
-        else:
-            st.info(f"No boreholes found **{highlight_mode.lower()}** the range of {min_val:.2f} to {max_val:.2f}.")
+        # 4. Add Block Boundary
+        fig.add_trace(go.Scatter(
+            x=df_boundary['X'], y=df_boundary['Y'], mode='lines', line=dict(color='red', width=1, dash='dash'),
+            name='Block Boundary', hovertemplate='Boundary Point<extra></extra>', showlegend=True
+        ))
+        
+        # 5. Final Layout 
+        fig.update_layout(
+            xaxis_title="Easting (X) - UTM", yaxis_title="Northing (Y) - UTM", dragmode='pan', yaxis=dict(scaleanchor="x", scaleratio=1),
+            title_text=f"Plan View: {param_display_name} Distribution in Seam {selected_seam} ({selected_sample_type})",
+            plot_bgcolor='white', 
+            paper_bgcolor='white', 
+            hovermode="closest", height=700,
+            font=dict(color=PLOT_TEXT_COLOR),
+            margin=dict(l=50, r=250, t=80, b=50), 
+            legend=dict(font=dict(size=10), x=1.1, y=1, yanchor='top', xanchor='left', bgcolor="rgba(255,255,255,0.8)", bordercolor="black", borderwidth=1)
+        )
 
-    # --- END NEW FEATURE ---
-    
+        st.plotly_chart(fig, use_container_width=True)
+
+
+        # Statistical Summary Table (Existing Block)
+        if not df_plot_data.empty:
+            data_to_summarize = df_plot_data[selected_param_key].dropna()
+            if not data_to_summarize.empty:
+                summary_data = {
+                    'Metric': ['Boreholes Plotted (n)', 'Minimum Value', 'Maximum Value', 'Average (Mean)', 'Median'],
+                    'Value': [len(data_to_summarize), f"{data_to_summarize.min():.2f}", f"{data_to_summarize.max():.2f}", f"{data_to_summarize.mean():.2f}", f"{data_to_summarize.median():.2f}"]
+                }
+                df_summary = pd.DataFrame(summary_data).set_index('Metric')
+                with st.container():
+                    st.subheader(f"Statistical Summary : ({selected_param_key})")
+                    st.dataframe(df_summary.style.set_properties(**{'text-align': 'left'}), use_container_width=True)
+                    st.markdown("---")
+
+
+        # --- START NEW FEATURE: HIGHLIGHTED BOREHOLES SUMMARY TABLE ---
+        if highlight_mode != 'None' and not df_plot_data.empty:
+            df_highlight = df_plot_data[df_plot_data['Filtered']].copy()
+            
+            if not df_highlight.empty:
+                
+                # 1. Create the summary dataframe
+                df_summary_highlight = df_highlight[['BHID', selected_param_key]].copy()
+                df_summary_highlight.columns = ['BHID', 'Value']
+                
+                # 2. Add static contextual information
+                df_summary_highlight.insert(1, 'Seam', selected_seam)
+                df_summary_highlight.insert(2, 'Sample Type', selected_sample_type)
+                df_summary_highlight.insert(3, 'Parameter', QUALITY_PARAMETERS.get(selected_param_key, selected_param_key).split('(')[0].strip()) # Use short name
+                
+                # 3. Rename the Value column for clarity in the table
+                param_unit_match = QUALITY_PARAMETERS.get(selected_param_key, selected_param_key)
+                param_unit = param_unit_match[param_unit_match.find('(') : param_unit_match.find(')')+1] if '(' in param_unit_match else ''
+                df_summary_highlight = df_summary_highlight.rename(columns={'Value': f'Value {param_unit}'})
+                
+                st.markdown("---")
+                st.subheader(f"Highlighted Boreholes Summary: **{highlight_mode}** ({len(df_highlight)} BHs)")
+                
+                st.dataframe(
+                    df_summary_highlight.style.format({f'Value {param_unit}': "{:.2f}"}).set_properties(**{'text-align': 'left'}), 
+                    use_container_width=True
+                )
+            else:
+                st.info(f"No boreholes found **{highlight_mode.lower()}** the range of {min_val:.2f} to {max_val:.2f}.")
+
+        # --- END NEW FEATURE ---
+        
 
 # --- TAB 0: Data Management (Definition) ---
 def data_upload_tab():
@@ -795,6 +1080,7 @@ def data_upload_tab():
 litho_loaded = st.session_state['df_litho'] is not None
 quality_loaded = st.session_state['df_quality'] is not None
 
+# UPDATED TAB LIST
 tab_data, tab_block_overview, tab_litho_log, tab_quality = st.tabs([
     "1. Data Management", "2. Block Overview", "3. Borehole Correlation", "4. Quality Analysis"
 ])
@@ -808,7 +1094,7 @@ if st.session_state['df_bh'] is None or st.session_state['df_boundary'] is None:
 with tab_data: data_upload_tab()
 
 with tab_block_overview:
-    st.header("Overview: Borehole Locations and ML Boundary")
+    st.subheader("Overview: Borehole Locations and ML Boundary")
     fig_plan_view = plot_plan_view(st.session_state['df_bh'], st.session_state['df_boundary'])
     st.plotly_chart(fig_plan_view, use_container_width=True, key="block_overview_map")
     st.write("---")
@@ -826,7 +1112,7 @@ with tab_litho_log:
     bhid_list = df_bh['BHID'].unique().tolist()
     seam_list = COAL_SEAM_LCODES
     seam_list_with_none = ['None'] + seam_list
-    st.header("Borehole Correlation")
+    st.subheader("Borehole Correlation")
     
     # Use the session state to get the list of selected boreholes from the multiselect
     selected_bhids = st.session_state.get('corr_bhid_select', [])
@@ -844,12 +1130,12 @@ with tab_litho_log:
     if not selected_bhids: st.info("Please select at least one borehole to generate a correlation plot.")
     else:
         st.markdown("---")
+        # NOTE: The change is here: selected_seams_lines is processed inside the function for linking
         fig_corr, excluded = plot_litho_correlation(df_bh, df_litho, selected_bhids, selected_seams_lines, filter_mode, reference_seam)
         if excluded: st.warning(f"**Note:** Borehole(s) `{', '.join(excluded)}` were excluded from the plot as they do not contain the reference seam '{reference_seam}'.")
         st.plotly_chart(fig_corr, use_container_width=True, key="main_correlation_plot")
         
         # --- NEW CODE: LITHOLOGY TABLE INTEGRATION ---
-        # The logic for this section was missing in the original, but assuming you want the fixed version
         def toggle_coal_only():
             st.session_state['show_coal_only'] = not st.session_state.get('show_coal_only', False)
 
@@ -924,30 +1210,40 @@ with tab_quality:
     df_bh, df_litho, df_quality = st.session_state['df_bh'], st.session_state['df_litho'], st.session_state['df_quality']
     bhid_list = df_bh['BHID'].unique().tolist()
     quality_param_keys = [k for k in QUALITY_PARAMETERS.keys() if k != 'THICKNESS']
-    tab_map, tab_stats, tab_analytics = st.tabs(["Quality Map", "Thickness Stats", "Quality Analytics"])
+    
+    # UPDATED SUB-TABS
+    tab_map, tab_stats, tab_quality_stats, tab_analytics = st.tabs(["Quality Map", "Thickness Stats", "Quality Stats", "Quality Analytics"])
 
     with tab_map:
-        st.subheader("Quality Data Distribution")
+        st.subheader("Quality Distribution")
         plot_quality_plan_view(df_bh, st.session_state['df_boundary'], df_quality, df_litho)
 
     with tab_stats:
+        st.subheader("Thickness stats")
         col_selector, col_button = st.columns([3, 1])
         def toggle_average_view_new(): st.session_state['show_avg_all'] = not st.session_state.get('show_avg_all', False)
+        
+        is_avg_all_t = st.session_state.get('show_avg_all', False)
+        
         with col_selector:
-            selected_stats_bhids = st.multiselect("Select Borehole(s) for Group Analysis (Optional):", bhid_list, default=bhid_list[:1] if not st.session_state.get('show_avg_all', False) and bhid_list else None, key='stats_bhids_new', disabled=st.session_state.get('show_avg_all', False))
+            # Thickness Stats: Multiselect disabled when Block-Wide is ON
+            selected_stats_bhids = st.multiselect("Select Borehole(s) for Group Analysis (Optional):", bhid_list, default=bhid_list[:1] if not is_avg_all_t and bhid_list else None, key='stats_bhids_new', disabled=is_avg_all_t)
+            if is_avg_all_t:
+                st.caption(f"Showing **Block-Wide Average** on all {len(bhid_list)} boreholes.")
         with col_button:
             st.write(""); st.write("")
-            button_label = "Show Block-Wide Average" if not st.session_state.get('show_avg_all', False) else "Show Selected Borehole(s)"
+            button_label = "Show Block-Wide Average" if not is_avg_all_t else "Show Selected Borehole(s)"
             st.button(button_label, key='toggle_avg_all_new', on_click=toggle_average_view_new)
         st.write("---")
         
-        if st.session_state.get('show_avg_all', False) or selected_stats_bhids:
+        if is_avg_all_t or selected_stats_bhids:
             df_source_litho = df_litho
-            bh_ids_to_analyze = bhid_list if st.session_state.get('show_avg_all', False) else selected_stats_bhids
-            if not st.session_state.get('show_avg_all', False):
+            bh_ids_to_analyze = bhid_list if is_avg_all_t else selected_stats_bhids
+            if not is_avg_all_t:
                 df_source_litho = df_source_litho[df_source_litho['BHID'].isin(selected_stats_bhids)].copy()
 
             n_bh = len(bh_ids_to_analyze)
+            # THICKNESS CALCULATION: Sum thickness for each seam per borehole, then average the borehole sums
             df_total_per_bh_seam = df_source_litho[df_source_litho['LCODE'].isin(COAL_SEAM_LCODES)].groupby(['BHID', 'LCODE'], as_index=False)['WIDTH'].sum()
             df_summary_calc = df_total_per_bh_seam.groupby('LCODE').agg(AVERAGE_THICKNESS_M=('WIDTH', 'mean')).reset_index()
             y_title = "Average Thickness (m)"
@@ -971,6 +1267,82 @@ with tab_quality:
                     st.metric(label="Total Non-Coal Thickness (Cumulative)", value=f"{total_non_coal_thickness:,.2f} m")
             else: st.info("Please select borehole(s) or switch to 'Block-Wide Average'.")
     
+    # --- NEW QUALITY STATS SUB-TAB IMPLEMENTATION ---
+    with tab_quality_stats:
+        if not quality_loaded:
+            st.warning("Please upload **Quality Data** to enable Quality Statistics."); st.stop()
+            
+        st.subheader("Seam-Wise Quality Comparison (Average)")
+        
+        col_param_q, col_sample_q, col_selector_q, col_button_q = st.columns([1.5, 1.5, 3, 1])
+        
+        is_avg_all_q = st.session_state.get('show_avg_all', False) # Reuse state variable
+
+        with col_param_q:
+            selected_quality_param = st.selectbox("1. Select Quality Parameter:", quality_param_keys, key='q_stats_param')
+            param_display_name = QUALITY_PARAMETERS.get(selected_quality_param, selected_quality_param)
+            
+        with col_sample_q:
+            sample_type_list = ['All Samples'] + df_quality['SAMPLE_TYPE'].unique().tolist()
+            selected_sample_type_q = st.selectbox("2. Select Sample Type:", sample_type_list, key='q_stats_sample_type')
+        
+        with col_selector_q:
+            # RECTIFIED LOGIC: Disable and reset the multiselect if Block-Wide mode is active
+            selected_stats_bhids_q = st.multiselect("3. Select Borehole(s) for Group Analysis (Optional):", 
+                                                     bhid_list, 
+                                                     default=bhid_list[:1] if not is_avg_all_q and bhid_list else [], # Default to first BH or empty list
+                                                     key='q_stats_bhids', 
+                                                     disabled=is_avg_all_q)
+            if is_avg_all_q:
+                st.caption(f"Showing **Block-Wide Average** on all {len(bhid_list)} boreholes.")
+            
+        with col_button_q:
+            st.write(""); st.write("")
+            button_label_q = "Show Selected Borehole(s)" if is_avg_all_q else "Show Block-Wide Average"
+            # NOTE: The callback toggles the single shared session state variable 'show_avg_all'
+            st.button(button_label_q, key='toggle_avg_all_q', on_click=toggle_average_view_new) 
+            
+        st.write("---")
+        
+        # Determine which set of BHIDs to use for analysis
+        bh_ids_to_analyze_q = bhid_list if is_avg_all_q else selected_stats_bhids_q
+        
+        if bh_ids_to_analyze_q:
+            n_bh_q = len(bh_ids_to_analyze_q)
+            
+            # Use the Arithmetic Average function
+            df_summary_calc_q = calculate_quality_stats_data(
+                df_quality, 
+                selected_quality_param, 
+                selected_sample_type_q, 
+                bh_ids_to_analyze_q
+            )
+            
+            scope_label_q = "Block-Wide Average" if is_avg_all_q else f"Selected BHs (n={n_bh_q})"
+            y_axis_label = f"Average {param_display_name}"
+            
+            if not df_summary_calc_q.empty:
+                # Plot the results using the Bar Chart type
+                fig_q_stats, df_table_q = plot_seam_stats(
+                    df_summary_calc_q, 
+                    f"Average {param_display_name} by Seam ({scope_label_q})", 
+                    y_axis_label, 
+                    selected_quality_param, 
+                    'Bar Chart', 
+                    COAL_SEAM_LCODES
+                )
+                st.plotly_chart(fig_q_stats, use_container_width=True)
+                
+                st.subheader(f"Summary Table: {y_axis_label}")
+                st.dataframe(df_table_q.style.format({y_axis_label: "{:.2f}"}).set_properties(**{'text-align': 'left'}), use_container_width=True)
+            else:
+                st.info(f"No valid data found for {param_display_name} in the selected seams/boreholes and sample type ({selected_sample_type_q}).")
+        else:
+            st.info("Please select borehole(s) or switch to 'Block-Wide Average' to view quality statistics.")
+    
+    # --- END NEW QUALITY STATS SUB-TAB IMPLEMENTATION ---
+
+
     with tab_analytics:
         if not quality_loaded: st.warning("Please upload Quality Data to enable analytics."); st.stop()
         tab_cross, tab_dist = st.tabs(["Cross-Plot", "Distribution"])
