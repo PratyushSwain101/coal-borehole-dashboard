@@ -1443,7 +1443,7 @@ with tab_3d:
             radius_val = st.number_input("Borehole Radius (m):", 0.1, 50.0, 4.0, 0.5)
             
             c1a, c1b = st.columns(2)
-            with c1a: include_waste_3d = st.checkbox("Show Waste Layers", value=True)
+            with c1a: include_waste_3d = st.checkbox("Show Parting Layers", value=True)
             with c1b: show_hairlines_3d = st.checkbox("Show Hairlines", value=True)
             
         with c2:
@@ -1452,7 +1452,7 @@ with tab_3d:
             selected_seams_3d = COAL_SEAM_LCODES if select_all_seams else st.multiselect("Choose Seams:", COAL_SEAM_LCODES, default=COAL_SEAM_LCODES[:1], key='3d_seam_sel')
             
             st.markdown("---")
-            target_surface_seams = st.multiselect("Generate RBF Surfaces For:", COAL_SEAM_LCODES, help="Select multiple seams to stack.")
+            target_surface_seams = st.multiselect("Generate Surfaces For:", COAL_SEAM_LCODES, help="Select multiple seams to stack.")
             
             # GLOBAL SURFACE CONTROLS (De-cluttered UI)
             if target_surface_seams:
@@ -1492,4 +1492,5 @@ with tab_3d:
         st.plotly_chart(st.session_state['fig_3d_generated'], use_container_width=True)
         if target_surface_seams:
             st.success(f"Generated Surfaces for: {', '.join(target_surface_seams)}")
+
 
