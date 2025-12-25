@@ -84,7 +84,7 @@ def get_litho_color(lcode):
 # --- STREAMLIT APP SETUP ---
 
 st.set_page_config(layout="wide", page_title="BRP Coal Project")
-st.title("BRP Coal Project")
+st.title("BRP Coal Project_V3.2")
 
 # Initialize Session State
 if 'df_bh' not in st.session_state: st.session_state['df_bh'] = None
@@ -1492,3 +1492,4 @@ with tab_3d:
         st.plotly_chart(st.session_state['fig_3d_generated'], use_container_width=True)
         if target_surface_seams:
             st.success(f"Generated Surfaces for: {', '.join(target_surface_seams)}")
+
