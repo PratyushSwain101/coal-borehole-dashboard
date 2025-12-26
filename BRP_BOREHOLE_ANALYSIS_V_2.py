@@ -384,6 +384,7 @@ def plot_litho_correlation(df_bh, df_litho, selected_bhids, selected_seams, filt
         # Lithology Intervals (Stacked Bars)
         if not df_litho_bh.empty:
             df_litho_bh['COLOR'] = df_litho_bh['LCODE'].apply(get_litho_color)
+            hover_text_series = ('BHID: ' + bhid + '<br>' + 'RL: ' + df_litho_bh['FROM RL'].round(2).astype(str) + ' to ' + df_litho_bh['TO RL'].round(2).astype(str) + ' m<br>' + 'From Depth: ' + df_litho_bh['FROM'].round(2).astype(str) + ' m<br>' + 'To Depth: ' + df_litho_bh['TO'].round(2).astype(str) + ' m<br>' + 'Width: ' + df_litho_bh['WIDTH'].round(2).astype(str) + ' m<br>' + 'LCODE: ' + df_litho_bh['LCODE'] + '<br>' + 'Detailed Lithology: ' + df_litho_bh['DETAILED LITHOLOGY'])
             
             # RECTIFIED TRACE: Removed the invalid `legendgroup` assignment
             fig.add_trace(go.Bar(
@@ -397,7 +398,7 @@ def plot_litho_correlation(df_bh, df_litho, selected_bhids, selected_seams, filt
                 orientation='v', 
                 width=BAR_WIDTH_VISUAL, 
                 hoverinfo='text', 
-                hovertext=df_litho_bh['LCODE'], 
+                hovertext=hover_text_series, 
                 showlegend=False, # We use the dummy traces for the legend
             ))
         
@@ -1443,7 +1444,7 @@ with tab_3d:
             radius_val = st.number_input("Borehole Radius (m):", 0.1, 50.0, 4.0, 0.5)
             
             c1a, c1b = st.columns(2)
-            with c1a: include_waste_3d = st.checkbox("Show Parting Layers", value=True)
+            with c1a: include_waste_3d = st.checkbox("Show Parting", value=True)
             with c1b: show_hairlines_3d = st.checkbox("Show Hairlines", value=True)
             
         with c2:
@@ -1492,5 +1493,3 @@ with tab_3d:
         st.plotly_chart(st.session_state['fig_3d_generated'], use_container_width=True)
         if target_surface_seams:
             st.success(f"Generated Surfaces for: {', '.join(target_surface_seams)}")
-
-
