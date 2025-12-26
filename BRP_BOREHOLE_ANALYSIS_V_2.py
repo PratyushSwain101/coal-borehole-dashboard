@@ -399,7 +399,7 @@ def plot_litho_correlation(df_bh, df_litho, selected_bhids, selected_seams, filt
                 width=BAR_WIDTH_VISUAL, 
                 hoverinfo='text', 
                 hovertext=hover_text_series, 
-                showlegend=False, # We use the dummy traces for the legend
+                showlegend=True, # We use the dummy traces for the legend
             ))
         
         # Borehole Header Annotation
@@ -1493,3 +1493,4 @@ with tab_3d:
         st.plotly_chart(st.session_state['fig_3d_generated'], use_container_width=True)
         if target_surface_seams:
             st.success(f"Generated Surfaces for: {', '.join(target_surface_seams)}")
+
