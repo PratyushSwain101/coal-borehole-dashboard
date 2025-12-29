@@ -7,6 +7,11 @@ import numpy as np
 import plotly.colors as pcolors
 from scipy.interpolate import Rbf  # Radial Basis Function for Extrapolation
 from matplotlib.path import Path   # For Polygon Clipping
+from scipy.spatial.distance import cdist
+from shapely.geometry import Point, LineString, Polygon
+from scipy.interpolate import interp1d
+from functools import lru_cache
+
 
 # --- CONFIGURATION ---
 
@@ -28,7 +33,7 @@ ALL_SYSTEM_SEAMS = ALL_PARENT_SEAMS + ALL_DAUGHTER_SEAMS
 
 # Standard Quality Parameters
 QUALITY_PARAMETERS = {
-    'THICKNESS': 'Total Coal Seam Thickness (m)',
+    'THICKNESS': 'Thickness (m)',
     'ASH_PERC': 'Ash Content (%)',
     'VM_PERC': 'Volatile Matter (%)',
     'FC_PERC': 'Fixed Carbon (%)',
@@ -83,8 +88,8 @@ def get_litho_color(lcode):
 
 # --- STREAMLIT APP SETUP ---
 
-st.set_page_config(layout="wide", page_title="BRP Coal Project")
-st.title("BRP Coal Project_V3.2")
+st.set_page_config(layout="wide", page_title="BRP Coal Project_V3.2.1")
+st.title("BRP Coal Project_V3.2.1")
 
 # Initialize Session State
 if 'df_bh' not in st.session_state: st.session_state['df_bh'] = None
@@ -98,6 +103,9 @@ if 'corr_bhid_select' not in st.session_state: st.session_state['corr_bhid_selec
 
 # --- FILE PROCESSING FUNCTIONS ---
 
+
+
+@st.cache_data(show_spinner=False)
 def process_bh_data(uploaded_file):
     if uploaded_file:
         try:
@@ -191,7 +199,7 @@ def plot_seam_stats(df_stats, title, y_axis_title, parameter, plot_type, selecte
         fig = px.bar(df_plot, x='COAL_SEAM', y='VALUE', title=title, labels={'VALUE': y_axis_title, 'COAL_SEAM': 'Coal Seam LCODE'}, color='COAL_SEAM', color_discrete_map=SEAM_COLOR_MAP, category_orders={"COAL_SEAM": seam_plot_order}, text='VALUE')
         fig.update_traces(texttemplate='%{text:.2f}', textposition='outside')
         y_max = df_plot['VALUE'].max() * 1.1 if not df_plot.empty and df_plot['VALUE'].max() > 0 else 10
-        fig.update_layout(xaxis={'categoryorder':'array'}, yaxis=dict(range=[0, y_max]), plot_bgcolor='white', paper_bgcolor='white', font=dict(color=PLOT_TEXT_COLOR), height=500, legend=dict(font=dict(size=10)))
+        fig.update_layout(xaxis={'categoryorder':'array'}, yaxis=dict(range=[0, y_max]), font=dict(color=PLOT_TEXT_COLOR), height=500, legend=dict(font=dict(size=10)))
         df_summary = df_plot.rename(columns={'VALUE': y_axis_title})
         df_summary['COAL_SEAM'] = pd.Categorical(df_summary['COAL_SEAM'], categories=COAL_SEAM_LCODES, ordered=True)
         df_summary = df_summary.sort_values('COAL_SEAM')
@@ -260,10 +268,10 @@ def plot_plan_view(df_bh, df_boundary, selected_bhids=None):
         legendgroup='boreholes'
     ))
 
-    bh_label_y_offset = -50 
+    bh_label_y_offset = -(df_bh['Y'].max() - df_bh['Y'].min()) * 0.03
     fig.add_trace(go.Scatter(
         x=df_bh['X'], y=df_bh['Y'] + bh_label_y_offset, mode='text', text=df_bh['BHID'], textposition="bottom center",
-        textfont=dict(size=8, color=PLOT_TEXT_COLOR), showlegend=False, legendgroup='boreholes', hoverinfo='skip'
+        textfont=dict(size=8), showlegend=False, legendgroup='boreholes', hoverinfo='skip'
     ))
     if selected_bhids:
         df_selected = df_bh[df_bh['BHID'].isin(selected_bhids)]
@@ -384,7 +392,12 @@ def plot_litho_correlation(df_bh, df_litho, selected_bhids, selected_seams, filt
         # Lithology Intervals (Stacked Bars)
         if not df_litho_bh.empty:
             df_litho_bh['COLOR'] = df_litho_bh['LCODE'].apply(get_litho_color)
-            hover_text_series = ('BHID: ' + bhid + '<br>' + 'RL: ' + df_litho_bh['FROM RL'].round(2).astype(str) + ' to ' + df_litho_bh['TO RL'].round(2).astype(str) + ' m<br>' + 'From Depth: ' + df_litho_bh['FROM'].round(2).astype(str) + ' m<br>' + 'To Depth: ' + df_litho_bh['TO'].round(2).astype(str) + ' m<br>' + 'Width: ' + df_litho_bh['WIDTH'].round(2).astype(str) + ' m<br>' + 'LCODE: ' + df_litho_bh['LCODE'] + '<br>' + 'Detailed Lithology: ' + df_litho_bh['DETAILED LITHOLOGY'])
+
+            hover_text_series =('<b>BHID:</b> ' + bhid + '<br>' + 
+            '<b>RL:</b> ' + df_litho_bh['FROM RL'].round(2).astype(str) + ' to ' + df_litho_bh['TO RL'].round(2).astype(str) + ' m<br>'+ 
+            '<b>Depth:</b> ' + df_litho_bh['FROM'].round(2).astype(str) + ' to ' + df_litho_bh['TO'].round(2).astype(str) + ' m<br>' + '<b>Thickness:</b> ' + df_litho_bh['WIDTH'].round(2).astype(str) + ' m<br>' + 
+            '<b>LCODE:</b> ' + df_litho_bh['LCODE'] + '<br>' + 
+            '<b>Lithology:</b> ' + df_litho_bh['DETAILED LITHOLOGY'])
             
             # RECTIFIED TRACE: Removed the invalid `legendgroup` assignment
             fig.add_trace(go.Bar(
@@ -581,9 +594,19 @@ def plot_litho_correlation(df_bh, df_litho, selected_bhids, selected_seams, filt
     return fig, excluded_bhids
 
 def plot_quality_crossplot(df_quality, selected_seam, selected_sample_type, x_param, y_param):
-    if df_quality is None or x_param not in df_quality.columns or y_param not in df_quality.columns: return go.Figure().add_annotation(text=f"Quality data not loaded or missing columns: {x_param} and/or {y_param}.", showarrow=False)
-    df_plot = df_quality[(df_quality['LCODE'] == selected_seam)].copy()
-    if selected_sample_type != 'All Samples': df_plot = df_plot[df_plot['SAMPLE_TYPE'] == selected_sample_type].copy()
+    if df_quality is None or x_param not in df_quality.columns or y_param not in df_quality.columns: 
+        return go.Figure().add_annotation(text="Missing data for cross-plot.", showarrow=False)
+
+    # NEW LOGIC: Include daughters if parent is selected
+    target_lcodes = [selected_seam]
+    if selected_seam in SEAM_SYSTEMS:
+        target_lcodes.extend(SEAM_SYSTEMS[selected_seam])
+
+    df_plot = df_quality[df_quality['LCODE'].isin(target_lcodes)].copy()
+    
+    if selected_sample_type != 'All Samples': 
+        df_plot = df_plot[df_plot['SAMPLE_TYPE'] == selected_sample_type].copy()
+    
     df_plot = df_plot.dropna(subset=[x_param, y_param])
     if df_plot.empty: return go.Figure().add_annotation(text=f"No combined data found for {x_param} vs {y_param} in Seam {selected_seam} for Sample Type {selected_sample_type}.", showarrow=False)
     x_display, y_display = QUALITY_PARAMETERS.get(x_param, x_param), QUALITY_PARAMETERS.get(y_param, y_param)
@@ -602,49 +625,60 @@ def plot_quality_crossplot(df_quality, selected_seam, selected_sample_type, x_pa
     fig.update_layout(plot_bgcolor='white', paper_bgcolor='white', font=dict(color=PLOT_TEXT_COLOR), height=600, hovermode='closest', coloraxis_colorbar=dict(title="Sample Interval (m)"), legend=dict(font=dict(size=10)))
     return fig
 
+
 def preprocess_quality_data(df_litho, df_quality, df_bh, selected_seam, selected_sample_type):
-    # --- LOGIC REMAINS FIXED: ONLY USES THE EXACT SELECTED SEAM FOR THICKNESS/QUALITY (FOR MAP VIEW) ---
+    """
+    Prepares data for the Quality Map.
+    FIX: Strictly filters for the single selected seam (LCODE) only.
+    Does NOT aggregate daughter seams into the parent.
+    """
     
-    # Thickness calculation now only uses the exact selected seam LCODE.
-    target_lcodes = [selected_seam] 
-    
+    # --- FIX START: Strict Selection ---
+    # We only look for the exact selected seam. 
+    # We do NOT extend the list with daughter seams anymore.
+    target_lcodes = [selected_seam]
+    # --- FIX END ---
+        
+    # Calculate Thickness for ONLY the selected seam
     df_thickness = df_litho[df_litho['LCODE'].isin(target_lcodes)].groupby('BHID')['WIDTH'].sum().reset_index()
     df_thickness.columns = ['BHID', 'THICKNESS']
     
+    # Merge with borehole coordinates
     df_stats = pd.merge(df_bh[['BHID', 'X', 'Y', 'RL']].copy(), df_thickness, on='BHID', how='left')
     df_stats['THICKNESS'] = df_stats['THICKNESS'].fillna(0)
     
     if df_quality is not None:
         def calculate_wavg_for_seam(df, parameter):
-            if df['INTERVAL'].sum() == 0 or (df[parameter] * df['INTERVAL']).isnull().all(): return np.nan
-            return (df[parameter] * df['INTERVAL']).sum() / df['INTERVAL'].sum()
+            # Mask out NaNs to ensure accurate weighted average
+            clean_df = df.dropna(subset=[parameter, 'INTERVAL'])
+            if clean_df['INTERVAL'].sum() == 0: return np.nan
+            return (clean_df[parameter] * clean_df['INTERVAL']).sum() / clean_df['INTERVAL'].sum()
         
         quality_cols = [col for col in df_quality.columns if col in QUALITY_PARAMETERS and col != 'THICKNESS']
         
-        # Quality data is also filtered only by the exact LCODE for weighted average.
-        df_quality_seam = df_quality[df_quality['LCODE'] == selected_seam].copy()
+        # Strict filter for quality data as well
+        df_quality_seam = df_quality[df_quality['LCODE'].isin(target_lcodes)].copy()
         
-        if selected_sample_type and selected_sample_type != 'All Samples':
+        if selected_sample_type != 'All Samples':
             df_quality_seam = df_quality_seam[df_quality_seam['SAMPLE_TYPE'] == selected_sample_type].copy()
             
-        # --- FIX: Ensure 'BHID' is the column name after reset_index() ---
-        # 1. Group and apply to get weighted averages (BHID is the index)
-        wavg_results = df_quality_seam.groupby('BHID').apply(lambda x: pd.Series({col: calculate_wavg_for_seam(x, col) for col in quality_cols}))
-        
-        # 2. Explicitly name the index before resetting to ensure the column is named 'BHID'
-        wavg_results.index.name = 'BHID'
-        wavg_results = wavg_results.reset_index()
-        # --- END FIX ---
+        # Group and calculate weighted averages
+        if not df_quality_seam.empty:
+            wavg_results = df_quality_seam.groupby('BHID').apply(
+                lambda x: pd.Series({col: calculate_wavg_for_seam(x, col) for col in quality_cols}),
+                include_groups=False 
+            ).reset_index()
 
-        df_stats = pd.merge(df_stats, wavg_results, on='BHID', how='left')
+            df_stats = pd.merge(df_stats, wavg_results, on='BHID', how='left')
         
     return df_stats
 
 
+
 def calculate_quality_stats_data(df_quality, selected_param, selected_sample_type, bh_ids_to_analyze):
     """
-    Calculates the **Arithmetic Average (Mean)** of a quality parameter for each coal seam, 
-    scoped by selected boreholes or the entire block.
+    Calculates the **Weighted Average** of a quality parameter for each coal seam.
+    Formula: Sum(Value * Interval) / Sum(Interval)
     """
     if df_quality is None or selected_param not in df_quality.columns:
         return pd.DataFrame()
@@ -655,28 +689,37 @@ def calculate_quality_stats_data(df_quality, selected_param, selected_sample_typ
         (df_quality['BHID'].isin(bh_ids_to_analyze))
     ].copy()
 
-    # 2. Filter by sample type and drop NaNs in the selected parameter
+    # 2. Filter by sample type
     if selected_sample_type != 'All Samples':
         df_filtered = df_filtered[df_filtered['SAMPLE_TYPE'] == selected_sample_type].copy()
-        
-    df_filtered.dropna(subset=[selected_param], inplace=True)
+    
+    # 3. Drop NaNs in the selected parameter AND Interval
+    #    (Crucial for Weighted Average)
+    df_filtered.dropna(subset=[selected_param, 'INTERVAL'], inplace=True)
 
     if df_filtered.empty:
         return pd.DataFrame()
 
-    # 3. Final aggregation: Calculate the simple ARITHMETIC MEAN (Average) for each seam (LCODE)
-    
-    df_summary_calc = df_filtered.groupby('LCODE').agg(
-        **{selected_param: (selected_param, 'mean')} # Simple Mean (Average)
-    ).reset_index()
-    
-    return df_summary_calc
+    # 4. Calculate Weighted Values
+    df_filtered['WEIGHTED_VAL'] = df_filtered[selected_param] * df_filtered['INTERVAL']
 
-# --- FUNCTION FOR QUALITY PLAN VIEW (WITH ALL FIXES AND NEW TABLE) ---
+    # 5. Group by Seam (LCODE) and sum the weighted values and intervals
+    df_grouped = df_filtered.groupby('LCODE')[['WEIGHTED_VAL', 'INTERVAL']].sum().reset_index()
+
+    # 6. Calculate final Weighted Average
+    #    Avoid division by zero
+    df_grouped = df_grouped[df_grouped['INTERVAL'] > 0].copy()
+    df_grouped[selected_param] = df_grouped['WEIGHTED_VAL'] / df_grouped['INTERVAL']
+
+    # 7. Return only the LCODE and the Calculated Parameter
+    return df_grouped[['LCODE', selected_param]]
+
+
+
+# --- FINAL UPDATED FUNCTION:---
 def plot_quality_plan_view(df_bh, df_boundary, df_quality, df_litho):
     
-    # 1. Selection Controls for Seam, Sample Type, Parameter, and Color Scale
-    # Added col_secondary_param for the new feature
+    # 1. Selection Controls
     col_seam, col_sample, col_param, col_secondary_param, col_colorscale = st.columns([1, 1, 1, 1, 1])
     
     param_list = list(QUALITY_PARAMETERS.keys())
@@ -702,7 +745,6 @@ def plot_quality_plan_view(df_bh, df_boundary, df_quality, df_litho):
         selected_param_key = st.selectbox("3. Color Parameter (Primary):", available_params, key='map_param_select')
         param_display_name = QUALITY_PARAMETERS.get(selected_param_key, selected_param_key)
     
-    # NEW: Secondary Parameter Control
     with col_secondary_param:
         available_secondary = ['None'] + available_params
         selected_secondary_key = st.selectbox("4. Label Parameter (Secondary):", available_secondary, index=0, key='map_secondary_param_select')
@@ -712,19 +754,27 @@ def plot_quality_plan_view(df_bh, df_boundary, df_quality, df_litho):
         sequential_colorscales = (['Viridis', 'Plasma', 'Inferno', 'Magma', 'Cividis', 'Turbo', 'Jet', 'Hot', 'Electric', 'Portland', 'Blackbody'])
         selected_colorscale = st.selectbox("5. Select Color Scale:", sequential_colorscales[:], index=9, key='map_colorscale_select')
 
-    # Preprocess/Aggregate data 
+    # --- CONTINUOUS MAP CONTROLS ---
+    st.write("")
+    c_toggle, c_power, c_radius = st.columns([1, 1, 1])
+    with c_toggle:
+        st.write("")
+        show_continuous = st.toggle("Show Interpolated Map", value=False, key='toggle_continuous_map')
+    with c_power:
+        idw_power = st.slider("IDW Power (Smoothness):", 1.0, 5.0, 2.0, 0.5, help="Controls how fast influence drops with distance; 2.0 is standard.")
+    with c_radius:
+        radius_limit = st.number_input("Interpolation Radius (m):", min_value=100.0, max_value=5000.0, value=500.0, step=50.0)
+
+    # Preprocess Data
     df_analyzed = preprocess_quality_data(df_litho, df_quality, df_bh, selected_seam, selected_sample_type)
     
-    # Create a temporary dataframe with seam depths and merge
     seam_depths_df = df_litho[df_litho['LCODE'] == selected_seam].groupby('BHID').agg(
-        SEAM_FROM=('FROM', 'min'),
-        SEAM_TO=('TO', 'max')
+        SEAM_FROM=('FROM', 'min'), SEAM_TO=('TO', 'max')
     ).reset_index()
     df_analyzed = pd.merge(df_analyzed, seam_depths_df, on='BHID', how='left')
     df_analyzed = pd.merge(df_analyzed, df_bh[['BHID', 'DEPTH']], on='BHID', how='left')
 
-
-    # --- NON-ZERO FILTERING ---
+    # Filter Data (Non-zero)
     df_plot_data = df_analyzed[
         (df_analyzed[selected_param_key].notna()) & 
         (df_analyzed[selected_param_key] > 0.001)
@@ -733,303 +783,182 @@ def plot_quality_plan_view(df_bh, df_boundary, df_quality, df_litho):
     fig = go.Figure()
 
     if not df_plot_data.empty:
-        # --- Range Input and Highlighting Controls ---
         param_min_data = df_plot_data[selected_param_key].min()
         param_max_data = df_plot_data[selected_param_key].max()
         
-        # Round the actual min/max data points to 2 decimals for the input fields
+        # --- IDW INTERPOLATION LOGIC ---
+        if show_continuous:
+            try:
+                points_x = df_plot_data['X'].values
+                points_y = df_plot_data['Y'].values
+                values = df_plot_data[selected_param_key].values
+
+                if len(points_x) >= 3:
+                    # 1. Grid Generation
+                    resolution = 200 
+                    min_x, max_x = df_boundary['X'].min(), df_boundary['X'].max()
+                    min_y, max_y = df_boundary['Y'].min(), df_boundary['Y'].max()
+                    
+                    grid_x_1d = np.linspace(min_x, max_x, resolution)
+                    grid_y_1d = np.linspace(min_y, max_y, resolution)
+                    grid_x, grid_y = np.meshgrid(grid_x_1d, grid_y_1d)
+                    
+                    grid_points = np.column_stack((grid_x.flatten(), grid_y.flatten()))
+                    data_points = np.column_stack((points_x, points_y))
+                    
+                    # 2. CALCULATE IDW
+                    dists = cdist(grid_points, data_points, metric='euclidean')
+                    dists[dists == 0] = 1e-9
+                    weights = 1.0 / np.power(dists, idw_power)
+                    weights_sum = weights.sum(axis=1)
+                    weights_sum[weights_sum == 0] = 1.0
+                    
+                    grid_z_flat = np.sum(weights * values, axis=1) / weights_sum
+                    grid_z = grid_z_flat.reshape(grid_x.shape)
+                    
+                    # 3. Apply Distance Masking
+                    min_dists = dists.min(axis=1).reshape(grid_x.shape)
+                    distance_mask = min_dists > radius_limit
+                    grid_z[distance_mask] = np.nan
+
+                    # 4. Boundary Clipping
+                    poly_path = Path(list(zip(df_boundary['X'], df_boundary['Y'])))
+                    mask_poly = poly_path.contains_points(grid_points).reshape(grid_x.shape)
+                    grid_z[~mask_poly] = np.nan 
+
+                    # 5. Add Contour Trace (MASTER LEGEND)
+                    fig.add_trace(go.Contour(
+                        z=grid_z, x=grid_x_1d, y=grid_y_1d,
+                        colorscale=selected_colorscale,
+                        # Match the min/max of the data exactly so it matches the boreholes
+                        zmin=param_min_data, zmax=param_max_data,
+                        contours=dict(coloring='heatmap', showlabels=True, labelfont=dict(size=10, color='white')),
+                        # Use the primary parameter name for the legend title
+                        colorbar=dict(title=dict(text=f'{param_display_name}', side='right'), x=1.15),
+                        opacity=1, connectgaps=False, line_smoothing=0.5,
+                        hoverinfo='z', name='IDW Model',
+                        showscale=True # Always show scale if map is visible
+                    ))
+                else:
+                    st.warning("Not enough data points (minimum 3) for interpolation.")
+            except Exception as e:
+                st.error(f"Error generating continuous map: {e}")
+
+        # --- SCATTER PLOT (BOREHOLES) ---
         param_min_rounded = round(float(param_min_data), 2)
         param_max_rounded = round(float(param_max_data), 2)
-        
-        # Use the rounded display values in the caption
         st.caption(f"Enter the Min/Max value for {param_display_name} (Data Range: {param_min_rounded:.2f} to {param_max_rounded:.2f})")
-        
         col_min, col_max, col_highlight_mode = st.columns([1, 1, 2])
-        
         with col_min:
-            min_val = st.number_input(
-                "Min Value:", 
-                min_value=param_min_rounded, 
-                max_value=param_max_rounded, 
-                value=param_min_rounded, 
-                step=0.1, 
-                format="%.2f",
-                key='quality_range_min'
-            )
+            min_val = st.number_input("Min Value:", min_value=param_min_rounded, max_value=param_max_rounded, value=param_min_rounded, step=0.1, format="%.2f", key='quality_range_min')
         with col_max:
-            max_val = st.number_input(
-                "Max Value:", 
-                min_value=float(min_val), # Prevents Max < Min
-                max_value=param_max_rounded, 
-                value=param_max_rounded, 
-                step=0.1,
-                format="%.2f",
-                key='quality_range_max'
-            )
-        
+            max_val = st.number_input("Max Value:", min_value=float(min_val), max_value=param_max_rounded, value=param_max_rounded, step=0.1, format="%.2f", key='quality_range_max')
         with col_highlight_mode:
             st.write(""); st.write(""); highlight_mode = st.radio("Highlight Boreholes:", ('None', 'In Range', 'Outside Range'), index=0, key='highlight_mode', horizontal=True)
-        
-        # The subsequent validation check can remain, but is less likely to trigger
-        if min_val > max_val:
-            st.error("Minimum value cannot be greater than Maximum value. Re-adjusting...")
-            pass 
-        
-        # --- FIX FOR PRECISION ISSUE (INCLUSIVE RANGE LOGIC) ---
-        
-        # Define a small tolerance (epsilon) for float comparisons
+
         EPSILON = 0.00001
-        
-        actual_min = min(min_val, max_val)
-        actual_max = max(min_val, max_val)
-        
+        actual_min, actual_max = min(min_val, max_val), max(min_val, max_val)
         if highlight_mode == 'In Range':
-            # Use >= (Min - EPSILON) and <= (Max + EPSILON) to be truly inclusive of float boundaries
-            df_plot_data['Filtered'] = (
-                (df_plot_data[selected_param_key] >= actual_min - EPSILON) & 
-                (df_plot_data[selected_param_key] <= actual_max + EPSILON)
-            )
+            df_plot_data['Filtered'] = (df_plot_data[selected_param_key] >= actual_min - EPSILON) & (df_plot_data[selected_param_key] <= actual_max + EPSILON)
         elif highlight_mode == 'Outside Range':
-            # Use strict < (Min - EPSILON) or > (Max + EPSILON)
-            df_plot_data['Filtered'] = (
-                (df_plot_data[selected_param_key] < actual_min - EPSILON) | 
-                (df_plot_data[selected_param_key] > actual_max + EPSILON)
-            )
+            df_plot_data['Filtered'] = (df_plot_data[selected_param_key] < actual_min - EPSILON) | (df_plot_data[selected_param_key] > actual_max + EPSILON)
         else:
             df_plot_data['Filtered'] = False
-            
-        # --- END FIX FOR PRECISION ISSUE ---
-        
+
         st.markdown("---")
         
-        # <<< HOVER TEMPLATE CODE >>>
-        param_short_name = param_display_name.split('(')[0].strip() # e.g. "Total Coal Seam Thickness"
-        
-        # Logic to extract the unit
+        param_short_name = param_display_name.split('(')[0].strip()
         unit_str = ""
-        if selected_param_key == 'THICKNESS':
-            unit_str = "m"
+        if selected_param_key == 'THICKNESS': unit_str = " m"
         elif '(' in param_display_name and ')' in param_display_name:
-            # Extracts the unit from parenthesis, e.g., "(%)" or "(Kcal/kg)"
-            unit_str = param_display_name[param_display_name.find('(') : param_display_name.find(')')+1]
-        
-        # Add a space if the unit exists
-        if unit_str:
-            unit_str = " " + unit_str
+            unit_str = " " + param_display_name[param_display_name.find('(') : param_display_name.find(')')+1]
+
 
         hover_template = (
             '<b>BHID:</b> %{customdata[0]}<br>' +
             '<b>RL:</b> %{customdata[1]:.2f} (m) &nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <b>TD:</b> %{customdata[2]:.2f} (m)<br>' +
-            f'<b>{param_short_name}:</b> %{{marker.color:.2f}}{unit_str} <b>({selected_seam})</b><br>' +
-            f'<b>From Depth:</b> %{{customdata[3]:.2f}} (m)<br>' +
-            f'<b>To Depth:</b> %{{customdata[4]:.2f}} (m)<br>' +
+            f'<b>{param_short_name}:</b><b> %{{marker.color:.2f}}{unit_str}</b> <b>({selected_seam})</b><br>' +
+            f'<b>Depth:</b> %{{customdata[3]:.2f}} (m)' +
+            f'<b> to</b> %{{customdata[4]:.2f}} (m)<br>' +
             '<b>X:</b> %{x:.2f}<br>' +
             '<b>Y:</b> %{y:.2f}<extra></extra>'
         )
 
-        # 1. Add Boreholes with Quality Data (Colored)
-        fig.add_trace(
-            go.Scatter(
-                x=df_plot_data['X'], y=df_plot_data['Y'], mode='markers',
-                marker=dict(
-                    size=10,
-                    color=df_plot_data[selected_param_key],
-                    colorscale=selected_colorscale, 
-                    colorbar=dict(title=f'{param_display_name} in {selected_seam} ({selected_sample_type})', title_side='right'), 
-                    showscale=True, cmin=param_min_data, cmax=param_max_data, line=dict(width=1, color=NON_COAL_BORDER) 
-                ),
-                name=f'{selected_param_key} Data ({len(df_plot_data)})',
-                hovertemplate=hover_template,
-                # Pass all necessary columns to customdata
-                customdata=df_plot_data[['BHID', 'RL', 'DEPTH', 'SEAM_FROM', 'SEAM_TO']],
-                showlegend=True, 
-                legendgroup='data_points'
-            )
-        )
-
-        # 2. Add BHID Labels
-        bh_label_y_offset = -60 
-        fig.add_trace(
-            go.Scatter(x=df_plot_data['X'], y=df_plot_data['Y'] + bh_label_y_offset, mode='text', text=df_plot_data['BHID'], textposition="bottom center",
-                textfont=dict(size=8, color=PLOT_TEXT_COLOR), showlegend=False, hoverinfo='skip', legendgroup='data_points'
-            )
-        )
-        
-        # 2b. NEW: Add Secondary Quality Parameter Labels
-        if selected_secondary_key != 'None':
-            
-            # Helper function to format the text label
-            def format_secondary_label(row):
-                value = row[selected_secondary_key]
-                if pd.isna(value):
-                    return ''
-                # Get the short name and unit for display
-                short_name = secondary_display_name.split('(')[0].strip()
-                unit_match = secondary_display_name[secondary_display_name.find('(') : secondary_display_name.find(')')+1]
-                unit = unit_match if '(' in secondary_display_name else ''
-                
-                # Format: ShortName: Value (Unit)
-                return f"{short_name}: {value:.2f} {unit}"
-            
-            df_plot_data['SECONDARY_LABEL'] = df_plot_data.apply(format_secondary_label, axis=1)
-
-            # Define offset for the text to sit next to the marker
-            label_x_offset = 40 
-            label_y_offset = 60
-            
-            fig.add_trace(
-                go.Scatter(
-                    x=df_plot_data['X'] + label_x_offset, 
-                    y=df_plot_data['Y'] + label_y_offset, 
-                    mode='text', 
-                    text=df_plot_data['SECONDARY_LABEL'], 
-                    # textposition="middle left",
-                    textfont=dict(size=9, color='darkgreen'), 
-                    name=f'{selected_secondary_key} Labels',
-                    showlegend=False, 
-                    hoverinfo='skip', 
-                    legendgroup='data_points'
-                )
-            )
-        
-        # 3. Highlight Filtered Boreholes (Colored with Highlighting Info)
-        if highlight_mode != 'None':
-            # Filter the data for highlighted boreholes
-            df_highlight = df_plot_data[df_plot_data['Filtered']].copy()
-
-            if not df_highlight.empty:
-                
-                # Add an annotation to the legend to signify the filter mode
-                fig.add_trace(
-                    go.Scatter(
-                        x=[None],
-                        y=[None],  # Invisible trace just for the legend entry
-                        marker=dict(
-                            size=10,
-                            color='red',
-                            symbol='circle',
-                            line=dict(width=3, color='red')
-                        ),
-                        name=f'Highlighted ({len(df_highlight)}) - {highlight_mode}',
-                        showlegend=True,
-                        legendgroup='highlight'
-                    )
-                )
-
-                # Scatter trace for the highlighted points, inheriting color/hover logic
-                fig.add_trace(
-                    go.Scatter(
-                        x=df_highlight['X'],
-                        y=df_highlight['Y'],
-                        mode='markers',
-                        marker=dict(
-                            size=10,
-                            color=df_highlight[selected_param_key],
-                            colorscale=selected_colorscale,
-                            colorbar=dict(
-                                title=f'{param_display_name} in {selected_seam} ({selected_sample_type})',
-                                title_side='right'
-                            ),
-                            showscale=False, cmin=param_min_data, cmax=param_max_data,
-                            line=dict(width=3, color='red')  # Red border for highlight
-                        ),
-                        name=f'Highlighted Points - {highlight_mode}',
-                        hovertemplate=hover_template,
-                        customdata=df_highlight[['BHID', 'RL', 'DEPTH', 'SEAM_FROM', 'SEAM_TO']],
-                        showlegend=False,
-                        legendgroup='highlight'
-                    )
-                )
-
-                # Add BHID labels for highlighted points (in red)
-                fig.add_trace(
-                    go.Scatter(
-                        x=df_highlight['X'],
-                        y=df_highlight['Y'] + bh_label_y_offset,
-                        mode='text',
-                        text=df_highlight['BHID'],
-                        textposition="bottom center",
-                        textfont=dict(size=8, color='red'),
-                        showlegend=False,
-                        hoverinfo='skip',
-                        legendgroup='highlight'
-                    )
-                )
-
-            else:
-                st.info(f"No boreholes found **{highlight_mode.lower()}** the range of {min_val:.2f} to {max_val:.2f}.")
-
-        
-        # 4. Add Block Boundary
+        # 1. Borehole Scatter Trace
+        # LOGIC CHANGE: Only show colorbar here if the continuous map (show_continuous) is FALSE.
         fig.add_trace(go.Scatter(
-            x=df_boundary['X'], y=df_boundary['Y'], mode='lines', line=dict(color='red', width=1, dash='dash'),
-            name='Block Boundary', hovertemplate='Boundary Point<extra></extra>', showlegend=True
+            x=df_plot_data['X'], y=df_plot_data['Y'], mode='markers',
+            marker=dict(
+                size=10, 
+                color=df_plot_data[selected_param_key], 
+                colorscale=selected_colorscale, 
+                colorbar=dict(title=f'{param_display_name}', title_side='right'), 
+                showscale=(not show_continuous), 
+                cmin=param_min_data, cmax=param_max_data, 
+                line=dict(width=1, color=NON_COAL_BORDER)
+            ),
+            name=f'Boreholes ({len(df_plot_data)})', hovertemplate=hover_template, customdata=df_plot_data[['BHID', 'RL', 'DEPTH', 'SEAM_FROM', 'SEAM_TO']], showlegend=True, legendgroup='data_points'
         ))
+
+        # 2. BHID Labels
+        fig.add_trace(go.Scatter(x=df_plot_data['X'], y=df_plot_data['Y'] - 60, mode='text', text=df_plot_data['BHID'], textposition="bottom center", textfont=dict(size=8, color=PLOT_TEXT_COLOR), showlegend=False, hoverinfo='skip', legendgroup='data_points'))
         
-        # 5. Final Layout 
+        # 3. Secondary Labels
+        if selected_secondary_key != 'None':
+            def format_secondary_label(row):
+                val = row[selected_secondary_key]
+                if pd.isna(val): return ''
+                short = secondary_display_name.split('(')[0].strip()
+                unit = secondary_display_name[secondary_display_name.find('(') : secondary_display_name.find(')')+1] if '(' in secondary_display_name else ''
+                return f"{short}: {val:.2f} {unit}"
+            df_plot_data['SECONDARY_LABEL'] = df_plot_data.apply(format_secondary_label, axis=1)
+            fig.add_trace(go.Scatter(x=df_plot_data['X'] + 40, y=df_plot_data['Y'] + 60, mode='text', text=df_plot_data['SECONDARY_LABEL'], textfont=dict(size=10, color='darkgreen'), name='Secondary Labels', showlegend=False, hoverinfo='skip', legendgroup='data_points'))
+
+        # 4. Highlight Filter
+        if highlight_mode != 'None':
+            df_highlight = df_plot_data[df_plot_data['Filtered']].copy()
+            if not df_highlight.empty:
+                fig.add_trace(go.Scatter(x=[None], y=[None], marker=dict(size=10, color='red', symbol='circle', line=dict(width=3, color='red')), name=f'Highlighted ({len(df_highlight)})', showlegend=True, legendgroup='highlight'))
+                fig.add_trace(go.Scatter(x=df_highlight['X'], y=df_highlight['Y'], mode='markers', marker=dict(size=10, color=df_highlight[selected_param_key], colorscale=selected_colorscale, showscale=False, cmin=param_min_data, cmax=param_max_data, line=dict(width=3, color='red')), name='Highlighted Points', hovertemplate=hover_template, customdata=df_highlight[['BHID', 'RL', 'DEPTH', 'SEAM_FROM', 'SEAM_TO']], showlegend=False, legendgroup='highlight'))
+                fig.add_trace(go.Scatter(x=df_highlight['X'], y=df_highlight['Y'] - 60, mode='text', text=df_highlight['BHID'], textposition="bottom center", textfont=dict(size=8, color='red'), showlegend=False, hoverinfo='skip', legendgroup='highlight'))
+            else:
+                st.info(f"No boreholes found **{highlight_mode.lower()}** range.")
+
+        # 5. Boundary Trace
+        fig.add_trace(go.Scatter(x=df_boundary['X'], y=df_boundary['Y'], mode='lines', line=dict(color='red', width=2, dash='dash'), name='Block Boundary', hoverinfo='skip', showlegend=True))
+        
         fig.update_layout(
-            xaxis_title="Easting (X) - UTM", yaxis_title="Northing (Y) - UTM", dragmode='pan', yaxis=dict(scaleanchor="x", scaleratio=1),
-            title_text=f"Plan View: {param_display_name} Distribution in Seam {selected_seam} ({selected_sample_type})",
-            plot_bgcolor='white', 
-            paper_bgcolor='white', 
+            xaxis_title="Easting (X)", yaxis_title="Northing (Y)", dragmode='pan', yaxis=dict(scaleanchor="x", scaleratio=1),
+            title_text=f"Quality Map (IDW): {param_display_name} - {selected_seam}",
             hovermode="closest", height=700,
-            font=dict(color=PLOT_TEXT_COLOR),
-            margin=dict(l=50, r=250, t=80, b=50), 
-            legend=dict(font=dict(size=10), x=1.1, y=1, yanchor='top', xanchor='left', bgcolor="rgba(255,255,255,0.8)", bordercolor="black", borderwidth=1)
+            font=dict(color=PLOT_TEXT_COLOR), margin=dict(l=50, r=200, t=80, b=50),
+            legend=dict(font=dict(size=10), x=1.25, y=1)
         )
 
         st.plotly_chart(fig, use_container_width=True)
 
-
-        # Statistical Summary Table (Existing Block)
+        # Statistical Summary
         if not df_plot_data.empty:
             data_to_summarize = df_plot_data[selected_param_key].dropna()
-            if not data_to_summarize.empty:
-                summary_data = {
-                    'Metric': ['Boreholes Plotted (n)', 'Minimum Value', 'Maximum Value', 'Average (Mean)', 'Median'],
-                    'Value': [len(data_to_summarize), f"{data_to_summarize.min():.2f}", f"{data_to_summarize.max():.2f}", f"{data_to_summarize.mean():.2f}", f"{data_to_summarize.median():.2f}"]
-                }
-                df_summary = pd.DataFrame(summary_data).set_index('Metric')
-                with st.container():
-                    st.subheader(f"Statistical Summary : ({selected_param_key})")
-                    st.dataframe(df_summary.style.set_properties(**{'text-align': 'left'}), use_container_width=True)
-                    st.markdown("---")
+            summary_data = {'Metric': ['Boreholes (n)', 'Min', 'Max', 'Mean', 'Median'], 'Value': [len(data_to_summarize), f"{data_to_summarize.min():.2f}", f"{data_to_summarize.max():.2f}", f"{data_to_summarize.mean():.2f}", f"{data_to_summarize.median():.2f}"]}
+            st.subheader(f"Statistical Summary : ({selected_param_key})")
+            st.dataframe(pd.DataFrame(summary_data).set_index('Metric').style.set_properties(**{'text-align': 'left'}), use_container_width=True)
+            st.markdown("---")
 
-
-        # --- START NEW FEATURE: HIGHLIGHTED BOREHOLES SUMMARY TABLE ---
         if highlight_mode != 'None' and not df_plot_data.empty:
-            df_highlight = df_plot_data[df_plot_data['Filtered']].copy()
-            
-            if not df_highlight.empty:
-                
-                # 1. Create the summary dataframe
-                df_summary_highlight = df_highlight[['BHID', selected_param_key]].copy()
-                df_summary_highlight.columns = ['BHID', 'Value']
-                
-                # 2. Add static contextual information
-                df_summary_highlight.insert(1, 'Seam', selected_seam)
-                df_summary_highlight.insert(2, 'Sample Type', selected_sample_type)
-                df_summary_highlight.insert(3, 'Parameter', QUALITY_PARAMETERS.get(selected_param_key, selected_param_key).split('(')[0].strip()) # Use short name
-                
-                # 3. Rename the Value column for clarity in the table
-                param_unit_match = QUALITY_PARAMETERS.get(selected_param_key, selected_param_key)
-                param_unit = param_unit_match[param_unit_match.find('(') : param_unit_match.find(')')+1] if '(' in param_unit_match else ''
-                df_summary_highlight = df_summary_highlight.rename(columns={'Value': f'Value {param_unit}'})
-                
-                st.markdown("---")
-                st.subheader(f"Highlighted Boreholes Summary: **{highlight_mode}** ({len(df_highlight)} BHs)")
-                
-                st.dataframe(
-                    df_summary_highlight.style.format({f'Value {param_unit}': "{:.2f}"}).set_properties(**{'text-align': 'left'}), 
-                    use_container_width=True
-                )
-            else:
-                st.info(f"No boreholes found **{highlight_mode.lower()}** the range of {min_val:.2f} to {max_val:.2f}.")
+            df_high = df_plot_data[df_plot_data['Filtered']].copy()
+            if not df_high.empty:
+                df_sum_h = df_high[['BHID', selected_param_key]].copy()
+                df_sum_h.columns = ['BHID', f'Value {unit_str}']
+                df_sum_h.insert(1, 'Seam', selected_seam)
+                st.subheader(f"Highlighted Boreholes: **{highlight_mode}** ({len(df_high)} BHs)")
+                st.dataframe(df_sum_h.style.format({f'Value {unit_str}': "{:.2f}"}), use_container_width=True)
 
-        # --- END NEW FEATURE ---
 
 # --- 3D MODELLING FUNCTIONS ---
 
+
+@st.cache_data(show_spinner=False)
 def prepare_3d_data(df_bh, df_litho, selected_bhids, selected_seams_filter, include_waste):
     """
     Merges collar RL with lithology depths to calculate absolute Z coordinates.
@@ -1109,13 +1038,13 @@ def create_cylinder_mesh(df_segment, radius, z_exaggeration, color, name, lcode,
         
         # Construct Hover Text for this specific interval
         hover_info = (
-            f"BHID: {row['BHID']}<br>"
-            f"RL: {row['Z_FROM']:.2f} to {row['Z_TO']:.2f} m<br>"
-            f"From Depth: {row['FROM']:.2f} m<br>"
-            f"To Depth: {row['TO']:.2f} m<br>"
-            f"Width: {row['WIDTH']:.2f} m<br>"
-            f"LCODE: {lcode}<br>"
-            f"Detailed Lithology: {row.get('DETAILED LITHOLOGY', '')}"
+            f"<b>BHID:</b> {row['BHID']}<br>"
+            f"<b>RL:</b> {row['Z_FROM']:.2f} to {row['Z_TO']:.2f} m<br>"
+            f"<b>Depth:</b> {row['FROM']:.2f} m "
+            f"to {row['TO']:.2f} m<br>"
+            f"<b>Thickness:</b> {row['WIDTH']:.2f} m<br>"
+            f"<b>LCODE:</b> {lcode}<br>"
+            f"<b>Lithology:</b> {row.get('DETAILED LITHOLOGY', '')}"
         )
         # Duplicate hover text for all 12 vertices of this cylinder
         hover_texts.extend([hover_info] * 12)
@@ -1160,50 +1089,96 @@ def create_cylinder_mesh(df_segment, radius, z_exaggeration, color, name, lcode,
     
     return mesh_trace, (line_x, line_y, line_z)
 
-# --- SURFACE GENERATION WITH RBF ---
 
-def generate_seam_surface_rbf(df_3d, seam_code, df_boundary, z_exaggeration, resolution, show_roof, show_floor, opacity):
-    seam_data = df_3d[df_3d['LCODE'] == seam_code]
-    if len(seam_data) < 3: return []
 
-    points_x, points_y = seam_data['X'].values, seam_data['Y'].values
-    points_z_roof, points_z_floor = seam_data['Z_FROM'].values, seam_data['Z_TO'].values
+@st.cache_data(show_spinner=False)
+def generate_seam_surface_rbf(df_3d, seam_code, df_boundary, z_exaggeration, resolution, show_roof, show_floor, opacity, max_distance=1000):
+    """
+    Generates 3D surface traces using RBF interpolation with Distance Masking.
+    """
     
-    # Get Fixed Color
-    seam_color = get_litho_color(seam_code)
+    # 1. DATA SELECTION LOGIC
+    if seam_code == "TOPO":
+        # TOPOGRAPHY MODE
+        topo_data = df_3d.drop_duplicates(subset=['BHID'])
+        if len(topo_data) < 3: return []
+        points_x = topo_data['X'].values
+        points_y = topo_data['Y'].values
+        points_z_roof = topo_data['RL'].values
+        # TOPO has no floor, we ignore it
+        points_z_floor = None 
+        seam_color = '#DEB887' # BurlyWood / Tan
+    else:
+        # COAL SEAM MODE
+        seam_data = df_3d[df_3d['LCODE'] == seam_code]
+        if len(seam_data) < 3: return []
+        points_x = seam_data['X'].values
+        points_y = seam_data['Y'].values
+        points_z_roof = seam_data['Z_FROM'].values
+        points_z_floor = seam_data['Z_TO'].values
+        seam_color = get_litho_color(seam_code)
 
+    # 2. GRID GENERATION
     min_x, max_x = df_boundary['X'].min(), df_boundary['X'].max()
     min_y, max_y = df_boundary['Y'].min(), df_boundary['Y'].max()
-    grid_x, grid_y = np.meshgrid(np.linspace(min_x, max_x, resolution), np.linspace(min_y, max_y, resolution))
+    
+    # Create 1D arrays for the grid
+    grid_x_1d = np.linspace(min_x, max_x, resolution)
+    grid_y_1d = np.linspace(min_y, max_y, resolution)
+    grid_x, grid_y = np.meshgrid(grid_x_1d, grid_y_1d)
 
+    # Flatten for masking calculations
+    grid_flat = np.column_stack((grid_x.flatten(), grid_y.flatten()))
+
+    # 3. MASKS (Boundary + Distance)
+    
+    # A. Polygon Boundary Mask
     poly_path = Path(list(zip(df_boundary['X'], df_boundary['Y'])))
-    mask = poly_path.contains_points(np.column_stack((grid_x.flatten(), grid_y.flatten()))).reshape(grid_x.shape)
+    mask_poly = poly_path.contains_points(grid_flat)
+    
+    # B. Distance Mask (Confidence Limit)
+    # Calculate distance from every grid point to the nearest actual data point
+    data_points = np.column_stack((points_x, points_y))
+    dists = cdist(grid_flat, data_points, metric='euclidean')
+    min_dists = dists.min(axis=1)
+    mask_dist = min_dists <= max_distance
+    
+    # Combine Masks
+    final_mask = mask_poly & mask_dist
+    final_mask = final_mask.reshape(grid_x.shape)
 
     traces = []
 
+    # 4. RBF INTERPOLATION HELPER
     def get_rbf_surface(z_values):
         try:
             rbf = Rbf(points_x, points_y, z_values, function='linear')
             grid_z = rbf(grid_x, grid_y)
-            grid_z[~mask] = np.nan
+            # Apply the combined mask
+            grid_z[~final_mask] = np.nan
             return grid_z * z_exaggeration
-        except: return None
+        except Exception:
+            return None
 
+    # 5. TRACE CONSTRUCTION
+    
+    # ROOF (Or Topo)
     if show_roof:
         grid_z_roof = get_rbf_surface(points_z_roof)
         if grid_z_roof is not None:
+            name_str = "Topography" if seam_code == "TOPO" else f'{seam_code} Roof'
             traces.append(go.Surface(
                 z=grid_z_roof, x=grid_x, y=grid_y, 
-                colorscale=[[0, seam_color], [1, seam_color]], # Use Fixed Color
+                colorscale=[[0, seam_color], [1, seam_color]],
                 showscale=False, opacity=opacity, 
-                name=f'{seam_code} Roof', hoverinfo='all', 
+                name=name_str, hoverinfo='all', 
                 showlegend=True, legendgroup=seam_code
             ))
 
-    if show_floor:
+    # FLOOR (Skip for TOPO)
+    if show_floor and points_z_floor is not None:
         grid_z_floor = get_rbf_surface(points_z_floor)
         if grid_z_floor is not None:
-            # Darken floor slightly for visual contrast, or keep same
             traces.append(go.Surface(
                 z=grid_z_floor, x=grid_x, y=grid_y, 
                 colorscale=[[0, seam_color], [1, seam_color]], 
@@ -1214,76 +1189,134 @@ def generate_seam_surface_rbf(df_3d, seam_code, df_boundary, z_exaggeration, res
 
     return traces
 
+
+
+
+@st.cache_data(show_spinner=False)
 def plot_3d_model_combined(df_3d, df_bh_filtered, z_exaggeration, radius, show_lines, df_boundary, 
-                          selected_surface_seams, global_surf_config):
+                           selected_surface_seams, global_surf_config, resolution): # <--- ADDED ARGUMENT
     fig = go.Figure()
     all_lines_x, all_lines_y, all_lines_z = [], [], []
     
-    # 1. Borehole Sticks
-    unique_seams = df_3d[df_3d['LCODE'].isin(COAL_SEAM_LCODES)]['LCODE'].unique()
-    sorted_seams = [s for s in COAL_SEAM_LCODES if s in unique_seams]
+    # --- OPTIMIZED BOREHOLE STICKS ---
+    unique_lcodes = df_3d['LCODE'].unique()
     
-    for lcode in sorted_seams:
-        seam_data = df_3d[df_3d['LCODE'] == lcode]
+    for lcode in unique_lcodes:
+        lcode_data = df_3d[df_3d['LCODE'] == lcode]
         color = get_litho_color(lcode)
-        mesh_trace, lines = create_cylinder_mesh(seam_data, radius, z_exaggeration, color, lcode, lcode, draw_lines=show_lines)
+        r = radius if lcode in COAL_SEAM_LCODES else radius * 0.8
+        mesh_trace, lines = create_cylinder_mesh(lcode_data, r, z_exaggeration, color, lcode, lcode, draw_lines=show_lines)
+        mesh_trace.update(showlegend=True, name=lcode)
         fig.add_trace(mesh_trace)
         if show_lines:
             all_lines_x.extend(lines[0]); all_lines_y.extend(lines[1]); all_lines_z.extend(lines[2])
 
-    non_coal_data = df_3d[~df_3d['LCODE'].isin(COAL_SEAM_LCODES)]
-    if not non_coal_data.empty:
-        mesh_trace, lines = create_cylinder_mesh(non_coal_data, radius * 0.9, z_exaggeration, NON_COAL_COLOR, 'Non-Coal', 'Non-Coal', draw_lines=show_lines)
-        fig.add_trace(mesh_trace)
-        if show_lines:
-            all_lines_x.extend(lines[0]); all_lines_y.extend(lines[1]); all_lines_z.extend(lines[2])
-
+    # --- BOUNDARY WIREFRAME ---
     if show_lines and all_lines_x:
-        fig.add_trace(go.Scatter3d(x=all_lines_x, y=all_lines_y, z=all_lines_z, mode='lines', line=dict(color='black', width=2), name='Boundaries', showlegend=False, hoverinfo='skip'))
+        fig.add_trace(go.Scatter3d(
+            x=all_lines_x, y=all_lines_y, z=all_lines_z, 
+            mode='lines', line=dict(color='black', width=1), 
+            name='Interval Boundaries', showlegend=False, hoverinfo='skip'
+        ))
 
-    fig.add_trace(go.Scatter3d(x=df_bh_filtered['X'], y=df_bh_filtered['Y'], z=df_bh_filtered['RL'] * z_exaggeration, mode='markers+text', marker=dict(size=3, color='black'), text=df_bh_filtered['BHID'], textposition="top center", textfont=dict(size=10, color='black'), name='Collars'))
+    # --- COLLAR POINTS ---
+    fig.add_trace(go.Scatter3d(
+        x=df_bh_filtered['X'], y=df_bh_filtered['Y'], z=df_bh_filtered['RL'] * z_exaggeration, 
+        mode='markers+text', marker=dict(size=4, color='black'), 
+        text=df_bh_filtered['BHID'], textposition="top center", 
+        name='Collars'
+    ))
 
-    # 2. Surfaces (Global Config applied to all)
-    if selected_surface_seams:
+    # 2. Surfaces (Dynamic Config applied per seam)
+    if selected_surface_seams and global_surf_config: 
         for seam_code in selected_surface_seams:
+            config = global_surf_config.get(seam_code, {})
+            
             traces = generate_seam_surface_rbf(
-                df_3d, seam_code, df_boundary, z_exaggeration, 50,
-                global_surf_config['show_roof'], global_surf_config['show_floor'],
-                global_surf_config['opacity']
+                df_3d, 
+                seam_code, 
+                df_boundary, 
+                z_exaggeration, 
+                resolution, # <--- USED HERE (Instead of 50)
+                config.get('show_roof', True),
+                config.get('show_floor', False),
+                config.get('opacity', 0.5),
+                config.get('max_dist', 1000)
             )
             for trace in traces:
                 fig.add_trace(trace)
 
-    fig.update_layout(title="3D Geological Model", scene=dict(xaxis_title='Easting', yaxis_title='Northing', zaxis_title=f'Elevation x {z_exaggeration}', aspectmode='data'), height=800, margin=dict(l=0, r=0, b=0, t=50))
+    fig.update_layout(
+        title="3D Geological Model (Optimized)",
+        scene=dict(
+            xaxis_title='Easting', yaxis_title='Northing', 
+            zaxis_title=f'Elevation (x{z_exaggeration})',
+            aspectmode='data'
+        ),
+        height=850, margin=dict(l=0, r=0, b=0, t=50)
+    )
     return fig
+
+
+
+
+
 
 # --- TAB DEFINITION ---
 def data_upload_tab():
     st.header("Data Management and Upload")
     st.markdown("Upload the required CSV files. **Borehole Location and Boundary are mandatory to proceed.**")
+    
+    # 1. File Uploaders Layout
     col_bh, col_boundary, col_litho, col_quality = st.columns(4)
     with col_bh:
-        uploaded_bh_file = st.file_uploader("1. Borehole Location Data", type="csv", key="bh_uploader_tab")
-        if st.button("Process Borehole Data", key="process_bh_tab"):
-            st.session_state['df_bh'] = process_bh_data(uploaded_bh_file); st.rerun()
+        uploaded_bh_file = st.file_uploader("1. Borehole Collar Data", type="csv", key="bh_uploader_tab")
     with col_boundary:
         uploaded_boundary_file = st.file_uploader("2. Block Boundary Data", type="csv", key="boundary_uploader_tab")
-        if st.button("Process Boundary Data", key="process_boundary_tab"):
-            st.session_state['df_boundary'] = process_boundary_data(uploaded_boundary_file); st.rerun()
     with col_litho:
         uploaded_litho_file = st.file_uploader("3. Lithology Data", type="csv", key="litho_uploader_tab_litho")
-        if st.button("Process Lithology Data", key="process_litho_tab"):
-            st.session_state['df_litho'] = process_litho_data(uploaded_litho_file); st.rerun()
     with col_quality:
         uploaded_quality_file = st.file_uploader("4. Quality Data", type="csv", key="quality_uploader_tab_quality")
-        if st.button("Process Quality Data", key="process_quality_tab"):
-            st.session_state['df_quality'] = process_quality_data(uploaded_quality_file); st.rerun()
+
+    st.write("") # Spacer
+    
+    # 2. Single Unified Process Button
+    if st.button("🚀 Process and Finalize All Data", type="primary", use_container_width=True):
+        # Verification check for mandatory files
+        if not uploaded_bh_file or not uploaded_boundary_file:
+            st.error("Missing mandatory data! Please upload both Borehole Location and Block Boundary files.")
+        else:
+            with st.spinner("Processing datasets..."):
+                # Process each file if it has been uploaded
+                st.session_state['df_bh'] = process_bh_data(uploaded_bh_file)
+                st.session_state['df_boundary'] = process_boundary_data(uploaded_boundary_file)
+                
+                # Optional files
+                if uploaded_litho_file:
+                    st.session_state['df_litho'] = process_litho_data(uploaded_litho_file)
+                if uploaded_quality_file:
+                    st.session_state['df_quality'] = process_quality_data(uploaded_quality_file)
+                
+                st.success("All uploaded datasets processed successfully!")
+                st.rerun() # Refresh to update metrics and unlock other tabs
+
+    # 3. Current Status Section
     st.markdown("---")
     st.subheader("Current Data Status")
     col_status = st.columns(4)
-    data_status = {'Location': st.session_state['df_bh'] is not None, 'Boundary': st.session_state['df_boundary'] is not None, 'Lithology': st.session_state['df_litho'] is not None, 'Quality': st.session_state['df_quality'] is not None}
-    for i, (name, loaded) in enumerate(data_status.items()):
+    data_status = {
+        'Location': st.session_state['df_bh'] is not None, 
+        'Boundary': st.session_state['df_boundary'] is not None, 
+        'Lithology': st.session_state['df_litho'] is not None, 
+        'Quality': st.session_state['df_quality'] is not None
+    }
+    
+    status_items = list(data_status.items())
+    for i in range(4):
+        name, loaded = status_items[i]
         col_status[i].metric(name, "✅ Loaded" if loaded else "❌ Missing")
+
+
 
 # --- MAIN EXECUTION ---
 
@@ -1296,6 +1329,8 @@ with tab_data: data_upload_tab()
 if st.session_state['df_bh'] is None or st.session_state['df_boundary'] is None:
     st.stop()
 
+
+
 with tab_block_overview:
     if st.session_state['df_bh'] is not None and st.session_state['df_boundary'] is not None:
         st.plotly_chart(plot_plan_view(st.session_state['df_bh'], st.session_state['df_boundary']), use_container_width=True)
@@ -1306,6 +1341,8 @@ with tab_block_overview:
             st.dataframe(st.session_state['df_bh'].drop(columns=['Hover_Label'], errors='ignore').style.set_properties(**{'text-align': 'left'}), use_container_width=True)
         with t2:
             st.dataframe(st.session_state['df_boundary'].style.set_properties(**{'text-align': 'left'}), use_container_width=True)
+
+
 
 with tab_litho_log:
     if st.session_state['df_litho'] is not None:
@@ -1333,13 +1370,13 @@ with tab_litho_log:
             
             # --- LITHOLOGY TABLE INTEGRATION ---
             st.markdown("---")
-            st.subheader("Borehole Lithology Data Table")
+            st.subheader("Borehole Lithology Data:")
             col_select, col_button = st.columns([1, 1])
             with col_select:
                 selected_bhid_table = st.selectbox("Select Borehole:", selected_bhids, key='litho_table_bhid_select') if selected_bhids else None
             with col_button:
                 st.write("")
-                if st.button("Toggle Coal Only", key='toggle_coal_only_button'):
+                if st.button("Coal Only", key='toggle_coal_only_button',type="primary", use_container_width=True):
                     st.session_state['show_coal_only'] = not st.session_state['show_coal_only']
 
             if selected_bhid_table:
@@ -1360,6 +1397,10 @@ with tab_litho_log:
                     st.dataframe(df_display.style.apply(color_rows, axis=1).format({'FROM': "{:.2f}", 'TO': "{:.2f}", 'THICKNESS (m)': "{:.2f}"}), use_container_width=True)
     else:
         st.warning("Please upload and process Borehole Lithology data.")
+
+
+
+
 
 with tab_quality:
     if st.session_state['df_quality'] is not None and st.session_state['df_litho'] is not None:
@@ -1399,7 +1440,7 @@ with tab_quality:
             with c3: qb = st.multiselect("Boreholes:", bhid_list, default=bhid_list[:1] if not is_avg else [], key='q_stats_b', disabled=is_avg)
             with c4: 
                 st.write(""); st.write("")
-                if st.button("Toggle Avg", key='toggle_avg_q'): st.session_state['show_avg_all'] = not is_avg
+                if st.button("Toggle Block-Wide Avg", key='toggle_avg_q'): st.session_state['show_avg_all'] = not is_avg
             
             q_bh_list = bhid_list if is_avg else qb
             if q_bh_list:
@@ -1409,20 +1450,32 @@ with tab_quality:
                     st.plotly_chart(fq, use_container_width=True)
                     st.dataframe(tq, use_container_width=True)
         
+
         with t_analytics:
             t_cross, t_dist = st.tabs(["Cross-Plot", "Distribution"])
             with t_cross:
-                c1, c2 = st.columns(2)
-                with c1: xp = st.selectbox("X:", list(QUALITY_PARAMETERS.keys()), index=0, key='xp')
-                with c2: yp = st.selectbox("Y:", list(QUALITY_PARAMETERS.keys()), index=1, key='yp')
-                sp = st.selectbox("Seam:", COAL_SEAM_LCODES, key='sp')
-                stp = st.selectbox("Type:", ['All Samples'] + list(st.session_state['df_quality']['SAMPLE_TYPE'].unique()), key='stp')
-                st.plotly_chart(plot_quality_crossplot(st.session_state['df_quality'], sp, stp, xp, yp), use_container_width=True)
+                st.subheader("Bivariate Analysis")
+                c1, c2, c3, c4 = st.columns(4)
+                
+                # Filter params to only those that exist in df_quality
+                valid_params = [k for k in QUALITY_PARAMETERS.keys() if k in st.session_state['df_quality'].columns]
+                
+                with c1: xp_a = st.selectbox("X-Axis:", valid_params, index=0, key='xp_a')
+                with c2: yp_a = st.selectbox("Y-Axis:", valid_params, index=1 if len(valid_params) > 1 else 0, key='yp_a')
+                with c3: sp_a = st.selectbox("Seam:", COAL_SEAM_LCODES, key='sp_a')
+                with c4: stp_a = st.selectbox("Sample Type:", ['All Samples'] + list(st.session_state['df_quality']['SAMPLE_TYPE'].unique()), key='stp_a')
+                
+                # Logic: Call the plotting function with the specific keys used above
+                fig_cross = plot_quality_crossplot(st.session_state['df_quality'], sp_a, stp_a, xp_a, yp_a)
+                st.plotly_chart(fig_cross, use_container_width=True)
+            
             with t_dist:
-                # Add distribution logic if needed, keeping simple for now based on previous requests
-                pass
+                st.info("Additional distribution analysis (Histograms) can be added here.")
     else:
         st.warning("Please upload Quality and Lithology Data.")
+
+
+
 
 with tab_3d:
     if st.session_state['df_litho'] is None:
@@ -1432,13 +1485,36 @@ with tab_3d:
     st.subheader("3D Geological Model")
 
     with st.expander("Model Configuration", expanded=True):
+        
         c1, c2 = st.columns(2)
         bhid_list = st.session_state['df_bh']['BHID'].unique().tolist()
         
+        # --- MAIN COLUMN 1: BOREHOLE & STRUCTURE ---
         with c1:
-            st.markdown("##### 1. Borehole & Structure")
-            select_all_bh = st.checkbox("Select All Boreholes", value=True, key='3d_select_all')
-            selected_bhids_3d = bhid_list if select_all_bh else st.multiselect("Choose Boreholes:", bhid_list, default=bhid_list[:1], key='3d_bhid_select')
+            st.markdown("##### 1. Borehole & Structure Selection")
+            
+            sub_c1, sub_c2 = st.columns(2)
+            
+            # -- Sub-Col 1: Boreholes --
+            with sub_c1:
+                select_all_bh = st.checkbox("Select All Boreholes", value=True, key='3d_select_all_bh')
+                if select_all_bh:
+                    selected_bhids_3d = bhid_list
+                    st.info(f"All {len(bhid_list)} boreholes selected.")
+                else:
+                    selected_bhids_3d = st.multiselect("Choose Boreholes:", bhid_list, default=bhid_list[:1], key='3d_bhid_select')
+
+            # -- Sub-Col 2: Coal Seam Cylinders --
+            with sub_c2:
+                select_all_seams = st.checkbox("Select All Coal Seams", value=True, key='3d_all_seams')
+                if select_all_seams:
+                    selected_seams_3d = COAL_SEAM_LCODES
+                    st.info(f"All {len(COAL_SEAM_LCODES)} seams selected.")
+                else:
+                    selected_seams_3d = st.multiselect("Choose Seams:", COAL_SEAM_LCODES, default=COAL_SEAM_LCODES[:1], key='3d_seam_sel')
+            
+            st.markdown("---")
+            st.markdown("**Visualization Settings**")
             
             z_exaggeration = st.number_input("Vertical Exaggeration:", 1.0, 100.0, 1.0, 0.5)
             radius_val = st.number_input("Borehole Radius (m):", 0.1, 50.0, 4.0, 0.5)
@@ -1447,51 +1523,72 @@ with tab_3d:
             with c1a: include_waste_3d = st.checkbox("Show Parting", value=True)
             with c1b: show_hairlines_3d = st.checkbox("Show Hairlines", value=True)
             
+        # --- MAIN COLUMN 2: SURFACE GENERATION ---
         with c2:
-            st.markdown("##### 2. Seam & Surface Filter")
-            select_all_seams = st.checkbox("Select All Coal Seams", value=True, key='3d_all_seams')
-            selected_seams_3d = COAL_SEAM_LCODES if select_all_seams else st.multiselect("Choose Seams:", COAL_SEAM_LCODES, default=COAL_SEAM_LCODES[:1], key='3d_seam_sel')
+            st.markdown("##### 2. Surface Generation")
             
-            st.markdown("---")
-            target_surface_seams = st.multiselect("Generate Surfaces For:", COAL_SEAM_LCODES, help="Select multiple seams to stack.")
-            
-            # GLOBAL SURFACE CONTROLS (De-cluttered UI)
-            if target_surface_seams:
-                st.caption("Surface Styling (Applied to All Selected)")
-                c2_s1, c2_s2, c2_s3 = st.columns(3)
-                with c2_s1: show_r_global = st.checkbox("Roof", value=True, key="gr")
-                with c2_s2: show_f_global = st.checkbox("Floor", value=True, key="gf")
-                with c2_s3: op_global = st.slider("Opacity", 0.1, 1.0, 0.5, key="gop")
-                
-                # Create config object to pass to function
-                global_surf_config = {
-                    'show_roof': show_r_global,
-                    'show_floor': show_f_global,
-                    'opacity': op_global
-                }
-            else:
-                global_surf_config = None
-            
-        st.write("")
-        generate_btn = st.button("Generate 3D Model", type="primary", use_container_width=True)
+            c_glob1, c_glob2 = st.columns(2)
+            with c_glob1:
+                interp_limit = st.slider("Interpolation Limit (m)", 100, 2000, 500, 50)
+            with c_glob2:
+                global_opacity = st.slider("Global Opacity", 0.1, 1.0, 1.0)
 
+            # --- NEW SLIDER FOR SMOOTHNESS ---
+            resolution_val = st.slider("Grid Resolution (Smoothness)", 50, 300, 150, 25, help="Higher values = Smoother edges but slower generation.")
+
+            st.write("") 
+            show_topo = st.checkbox("Show Topography (TOPO)", value=False)
+            
+            c_surf_r, c_surf_f = st.columns(2)
+            with c_surf_r:
+                selected_roofs = st.multiselect("Show Roof For:", COAL_SEAM_LCODES, key='sel_roofs_3d')
+            with c_surf_f:
+                selected_floors = st.multiselect("Show Floor For:", COAL_SEAM_LCODES, key='sel_floors_3d')
+
+        st.write("")
+        st.markdown("---")
+        
+        generate_btn = st.button("🚀 Generate 3D Model", type="primary", use_container_width=True)
+
+    # --- PROCESSING LOGIC ---
+    surface_configs = {}
+    target_surface_seams = []
+
+    # 1. Handle Topo
+    if show_topo:
+        target_surface_seams.append("TOPO")
+        surface_configs["TOPO"] = {'show_roof': True, 'show_floor': False, 'opacity': global_opacity, 'max_dist': interp_limit}
+
+    # 2. Handle Coal Seams
+    all_selected_seams = sorted(list(set(selected_roofs + selected_floors)), key=lambda x: COAL_SEAM_LCODES.index(x) if x in COAL_SEAM_LCODES else 999)
+    for seam in all_selected_seams:
+        target_surface_seams.append(seam)
+        surface_configs[seam] = {'show_roof': seam in selected_roofs, 'show_floor': seam in selected_floors, 'opacity': global_opacity, 'max_dist': interp_limit}
+
+    # TRIGGER
     if generate_btn:
         if selected_bhids_3d:
-            with st.spinner("Generating 3D Scene (Calculating RBF Surfaces... this may take time)..."):
+            with st.spinner("Generating 3D Scene..."):
                 df_3d_data = prepare_3d_data(st.session_state['df_bh'], st.session_state['df_litho'], selected_bhids_3d, selected_seams_3d, include_waste_3d)
                 df_bh_filtered = st.session_state['df_bh'][st.session_state['df_bh']['BHID'].isin(selected_bhids_3d)]
                 
                 fig_3d = plot_3d_model_combined(
-                    df_3d_data, df_bh_filtered, 
-                    z_exaggeration, radius_val, show_hairlines_3d,
-                    st.session_state['df_boundary'], target_surface_seams, global_surf_config
+                    df_3d_data, 
+                    df_bh_filtered, 
+                    z_exaggeration, 
+                    radius_val, 
+                    show_hairlines_3d,
+                    st.session_state['df_boundary'], 
+                    target_surface_seams, 
+                    surface_configs,
+                    resolution_val # <--- PASSING THE NEW SLIDER VALUE HERE
                 )
+                
                 st.session_state['fig_3d_generated'] = fig_3d
-        else: st.warning("Select at least one borehole.")
+        else: 
+            st.warning("Select at least one borehole.")
 
     if 'fig_3d_generated' in st.session_state:
         st.plotly_chart(st.session_state['fig_3d_generated'], use_container_width=True)
         if target_surface_seams:
-            st.success(f"Generated Surfaces for: {', '.join(target_surface_seams)}")
-
-
+            st.caption(f"Visualizing surfaces: {', '.join(target_surface_seams)}")
